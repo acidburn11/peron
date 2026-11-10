@@ -10,6 +10,14 @@ VAPID_SUBJECT = "https://github.com/acidburn11/peron"
 name = "DEVICE"
 class_name = "Device"
 
+[[durable_objects.bindings]]
+name = "SHARE"
+class_name = "Share"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Device"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Share"]

@@ -57,7 +57,7 @@ const L10N = {
     getOffNow: 'Coboara acum!', getOffNext: 'Coboara la urmatoarea', getOffAt2: s => `Coboara la ${s}`, nextStop: s => `urmatoarea: ${s}`, offNowPush: s => `Coboara acum: ${s}`, prepare: (n, s) => `Pregateste-te: cobori peste ${pl(n, 'statie', 'statii')}, la ${s}`,
     stopsLeft: n => n === 1 ? '1 statie ramasa' : `${n} statii ramase`, arrival: t => `sosire ${t}`, next: 'Urmeaza', prevLeg: 'Etapa anterioara', nextLeg: 'Etapa urmatoare', iArrived: 'Am ajuns', stopLive: 'Opreste', noGps: 'Fara GPS: pozitia este estimata dupa orar.',
     etaMsg: (to, t, l) => `Sunt pe drum spre ${to}. Ajung pe la ${t}${l ? ` (sunt in ${l})` : ''}.`, copied: 'Mesajul a fost copiat.', stopsCount: n => pl(n, 'statie', 'statii'),
-    pushBoard: (l, h) => `${l} spre ${h} soseste in 2 min`, pushPre: (n, s) => `Pregateste-te: cobori peste ${pl(n, 'statie', 'statii')}, la ${s}`, pushOff: s => `Coboara la urmatoarea: ${s}`, pushArrive: s => `Ai ajuns la ${s}`,
+    pushBoard: (l, h) => `${l} spre ${h} soseste in 2 min`, pushPre: (n, s) => `Pregateste-te: cobori peste ${pl(n, 'statie', 'statii')}, la ${s}`, pushAlight: s => `Coboara la urmatoarea: ${s}`, pushArrive: s => `Ai ajuns la ${s}`,
     langName: 'Romana'
   },
   en: {
@@ -101,7 +101,7 @@ const L10N = {
     getOffNow: 'Get off now!', getOffNext: 'Get off at the next stop', getOffAt2: s => `Get off at ${s}`, nextStop: s => `next: ${s}`, offNowPush: s => `Get off now: ${s}`, prepare: (n, s) => `Get ready: ${n} ${n === 1 ? 'stop' : 'stops'} to go, getting off at ${s}`,
     stopsLeft: n => n === 1 ? '1 stop left' : `${n} stops left`, arrival: t => `arrives ${t}`, next: 'Up next', prevLeg: 'Previous step', nextLeg: 'Next step', iArrived: 'I have arrived', stopLive: 'Stop', noGps: 'No GPS: position is estimated from the timetable.',
     etaMsg: (to, t, l) => `On my way to ${to}. I'll arrive around ${t}${l ? ` (on ${l})` : ''}.`, copied: 'Message copied.', stopsCount: n => `${n} ${n === 1 ? 'stop' : 'stops'}`,
-    pushBoard: (l, h) => `${l} to ${h} arrives in 2 min`, pushPre: (n, s) => `Get ready: ${n} ${n === 1 ? 'stop' : 'stops'} to go, getting off at ${s}`, pushOff: s => `Get off at the next stop: ${s}`, pushArrive: s => `You have arrived at ${s}`,
+    pushBoard: (l, h) => `${l} to ${h} arrives in 2 min`, pushPre: (n, s) => `Get ready: ${n} ${n === 1 ? 'stop' : 'stops'} to go, getting off at ${s}`, pushAlight: s => `Get off at the next stop: ${s}`, pushArrive: s => `You have arrived at ${s}`,
     langName: 'English'
   }
 };
@@ -202,12 +202,14 @@ async function api(path, params, ttl = 60000) {
   const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 25000);
   let r;
   try { r = await fetch(url, { signal: ac.signal }); }
-  catch { throw new Error(T('netErr')); }
-  finally { clearTimeout(to); }
+  catch { clearTimeout(to); const pc = typeof pcGet === 'function' && PC_LIM[path] ? pcGet(url) : null; if (pc) { setOffline(pc.t); return pc.d; } throw new Error(T('netErr')); }
+  clearTimeout(to);
   if (!r.ok) throw new Error(r.status === 429 ? T('tooMany') : T('srvErr', r.status));
   const d = await r.json();
   if (cache.size > 300) cache.clear();
   cache.set(url, { t: Date.now(), d });
+  if (st.offlineAt !== undefined && st.offlineAt !== null) setOffline(null);
+  pcPut(path, url, d);
   return d;
 }
 
@@ -269,6 +271,7 @@ function setSheet(pos, instant) {
   sheet.style.transform = `translateY(${sheetY}px)`;
   pane.style.height = (innerHeight - sheetY - 26) + 'px';
   $('#recenter').style.bottom = (innerHeight - sheetY + 12) + 'px';
+  $('#recenter').hidden = pos === 'full';
 }
 (function drag() {
   let y0, s0, t0, on = false;
@@ -474,6 +477,8 @@ function back() {
   if (prev === 'route' && st.cur) return go('route', () => renderRoute(st.cur));
   if (prev === 'stop' && st.stop) return go('stop', () => renderStop(st.stop));
   if (prev === 'line' && st.line) return go('line', () => renderLine(st.line, st.lineDir));
+  const gen = { weather: renderWeather, deps: renderDeps, hist: renderHist, reach: renderReach };
+  if (gen[prev]) return go(prev, gen[prev]);
   if (prev && prev !== 'home') return back();
   backStack.length = 0; backStack.push('home'); routeL.clearLayers(); go('home', renderHome); setSheet('half');
 }
@@ -490,7 +495,7 @@ function renderHome() {
   const favs = store.get('favs', []), rec = store.get('recent', []).filter(r => !favs.some(f => f.k === r.k)).slice(0, 5), fst = store.get('fstops', []);
   pane.innerHTML = `<div class="quick">${placeBtn('home')}${placeBtn('work')}</div>
     <div id="lastHome"></div>
-    <button class="row tool" id="reachB"><span class="ic">${I.reach}</span><span class="tx"><div>${T('reach')}</div><small>${T('reachSub')}</small></span>${I.chev}</button>
+    <div class="tools"><button id="reachB">${I.reach}<span>${T('reach')}</span></button><button id="depsB">${I.dep}<span>${T('depsT')}</span></button><button id="histB">${I.hist}<span>${T('histT')}</span></button></div>
     ${fst.length ? `<h3>${T('myStops')}</h3><div id="favStops"></div>` : ''}
     <h3>${T('nearStops')}</h3><div id="near">${st.loc ? '<div class="skel" style="height:60px"></div>' : `<button class="row" id="askLoc"><span class="ic">${I.me}</span><span class="tx"><div>${T('showNear')}</div><small>${T('needLoc')}</small></span></button>`}</div>
     ${favs.length ? `<h3>${T('savedRoutes')}</h3>` + favs.map(x => routeRow(x, 'favs', I.star)).join('') : ''}
@@ -501,6 +506,8 @@ function renderHome() {
     routeTo(p);
   });
   $('#reachB').onclick = () => nav('reach', renderReach);
+  $('#depsB').onclick = () => nav('deps', renderDeps);
+  $('#histB').onclick = () => nav('hist', renderHist);
   $('#askLoc')?.addEventListener('click', async () => { try { await needLoc(); centerOn(st.loc, 16); renderHome(); } catch (e) { toast(e.message); } });
   pane.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
     const x = [...favs, ...rec].find(y => y.k === b.dataset.k);
@@ -531,10 +538,10 @@ async function nearStops() {
 const depT = s => new Date(s.place.departure || s.place.scheduledDeparture);
 async function loadFavStops() {
   const fst = store.get('fstops', []).slice(0, 6);
-  const res = await Promise.all(fst.map(p => api('/v6/stoptimes', { stopId: p.stopId, n: 10, language: O.lang }, 25000).catch(() => null)));
+  const res = await Promise.all(fst.map(p => api('/v6/stoptimes', { stopId: p.stopId, n: 10, language: O.lang }, 25000).catch(() => ttFallback(p.stopId))));
   const el = $('#favStops'); if (!el || view !== 'home') return;
   el.innerHTML = fst.map((p, i) => {
-    const deps = (res[i]?.stopTimes || []).filter(s => s.place.departure || s.place.scheduledDeparture).sort((a, b) => depT(a) - depT(b)).slice(0, 3);
+    const deps = (res[i]?.stopTimes || []).filter(s => (s.place.departure || s.place.scheduledDeparture) && depT(s) > Date.now() - 60000).sort((a, b) => depT(a) - depT(b)).slice(0, 3);
     return `<div class="fs"><button class="fsh" data-fs="${i}"><b>${esc(p.name)}</b>${I.chev}</button>${deps.length ? deps.map(s => { const t = s.place.departure || s.place.scheduledDeparture; return `<div class="fsr">${badge(s)}<span class="hs">${esc(s.headsign || '')}</span><b>${inMin(t, s.place.tz)}</b>${s.realTime ? '<i class="live"></i>' : ''}</div>`; }).join('') : `<div class="fsr muted">${res[i] ? T('noDepSoon') : T('depLoadErr')}</div>`}</div>`;
   }).join('');
   el.querySelectorAll('[data-fs]').forEach(b => b.onclick = () => openStop(fst[b.dataset.fs]));
@@ -696,9 +703,11 @@ function renderOpts() {
     ${opt(T('soundO'), '', tg('sound'))}
     ${opt(T('lastAlertO'), T('lastAlertSub'), tg('lastAlert'))}
     ${pushState ? `<p class="muted" style="font-size:14px">${pushState}</p>` : opt(T('pushOk'), '', `<button class="btn ghost" id="pushTest">${T('pushTest')}</button>`)}
+    ${opt(T('myName'), T('myNameSub'), `<input class="inp" id="myName" value="${esc(O.myName || '')}" maxlength="30" style="width:130px">`)}
     <h3>${T('placesH')}</h3>
     ${['home', 'work'].map(k => opt(T(k), O[k] ? esc(O[k].name) : T('unset'), `<button class="btn ghost" data-p="${k}">${O[k] ? T('change') : T('set')}</button>`)).join('')}
     ${opt(T('history'), '', `<button class="btn ghost" id="clr">${T('delete')}</button>`)}
+    ${O.home || O.work ? `<h3>${T('siriH')}</h3>${['home', 'work'].filter(k => O[k]).map(k => opt(T(k), '', `<button class="btn ghost" data-siri="${k}">${I.link.replace('<svg', '<svg style="width:16px;height:16px;vertical-align:-3px"')} ${T('copyLink')}</button>`)).join('')}<p class="muted" style="font-size:13px">${T('siriInfo')}</p>` : ''}
     <p class="credit">${T('credit')}</p></div>`;
   $('#closeOpts').onclick = () => { $('#opts').hidden = true; if (view === 'results' && st.from && st.to) plan(); };
   $('#opts').querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
@@ -720,6 +729,8 @@ function renderOpts() {
     try { await pushSchedule('test', [{ id: 'test', at: Date.now() + 5000, title: 'Peron', body: T('pushTestBody') }]); toast('OK'); } catch (e) { toast(e.message); }
   });
   $('#opts').querySelectorAll('[data-p]').forEach(b => b.onclick = () => openSearch('to', p => { O[b.dataset.p] = p; saveOpts(); renderOpts(); if (view === 'home') renderHome(); }, T(b.dataset.p + 'Addr')));
+  $('#myName').onchange = e => { O.myName = e.target.value.trim(); saveOpts(); };
+  $('#opts').querySelectorAll('[data-siri]').forEach(b => b.onclick = () => copyText(siriLink(O[b.dataset.siri]), T('linkCopied')));
   $('#clr').onclick = () => { store.set('recent', []); store.set('places', []); toast(T('historyCleared')); if (view === 'home') renderHome(); };
 }
 $('#openOpts').onclick = () => { renderOpts(); $('#opts').hidden = false; };
@@ -731,7 +742,8 @@ function applyStatic() {
 }
 function refreshView() {
   if (live) return liveTick();
-  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach })[view]?.();
+  renderWxChip();
+  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach, weather: renderWeather, deps: renderDeps, hist: renderHist })[view]?.();
 }
 
 /* ---------- planificare ---------- */
@@ -892,7 +904,8 @@ function renderStop(p) {
   centerOn(ll(p), Math.max(map.getZoom(), 16));
   const d = st.loc ? dist(st.loc, ll(p)) : null;
   const fk = p.stopId || p.name, isF = store.get('fstops', []).some(x => (x.stopId || x.name) === fk);
-  pane.innerHTML = hd(esc(p.name), `<button class="icb fav ${isF ? 'on' : ''}" id="fstop" aria-label="${T('favStop')}">${I.star}</button>`)
+  const wItem = { stopId: p.stopId, name: p.name, line: null };
+  pane.innerHTML = hd(esc(p.name), `${PUSH && p.stopId ? `<button class="icb bell ${isWatched(wItem) ? 'on' : ''}" id="wstop" aria-label="${T('watchB')}">${I.bell}</button>` : ''}<button class="icb fav ${isF ? 'on' : ''}" id="fstop" aria-label="${T('favStop')}">${I.star}</button>`)
     + `<div class="muted" style="margin:-6px 0 10px;font-size:14px">${d !== null ? T('distFromYou', meters(d)) : ''}</div><div id="stopAl"></div>
     <div class="btns"><button class="btn ghost" id="fromHere">${T('leaveHere')}</button><button class="btn" id="toHere">${T('goHere')}</button></div>
     <div class="seg wide" id="stopTabs"><button data-v="dep" class="${st.stopTab === 'dep' ? 'on' : ''}">${T('nextDeps')}</button><button data-v="tt" class="${st.stopTab === 'tt' ? 'on' : ''}">${I.cal.replace('<svg', '<svg style="width:16px;height:16px;vertical-align:-3px"')} ${T('timetable')}</button></div>
@@ -904,18 +917,19 @@ function renderStop(p) {
     f = f.some(x => (x.stopId || x.name) === fk) ? f.filter(x => (x.stopId || x.name) !== fk) : [...f, { name: p.name, lat: p.lat, lon: p.lon, stopId: p.stopId, modes: p.modes }];
     store.set('fstops', f); $('#fstop').classList.toggle('on'); toast($('#fstop').classList.contains('on') ? T('stopFavOn') : T('stopFavOff'));
   };
+  $('#wstop')?.addEventListener('click', e => toggleWatch([wItem], e.currentTarget));
   $('#stopTabs').querySelectorAll('button').forEach(b => b.onclick = () => { st.stopTab = b.dataset.v; renderStop(p); });
   clearInterval(paneTimer);
   if (st.stopTab === 'tt') return loadTimetable(p);
   const load = async () => {
     try {
-      const r = await api('/v6/stoptimes', { stopId: p.stopId, n: 40, language: O.lang, withAlerts: true }, 25000);
+      const r = await api('/v6/stoptimes', { stopId: p.stopId, n: 40, language: O.lang, withAlerts: true }, 25000).catch(e => { const f = ttFallback(p.stopId); if (f.stopTimes.length) return f; throw e; });
       const el = $('#deps'); if (!el || view !== 'stop' || st.stopTab !== 'dep') return;
       const al = alertsOf([{ from: r.place || {}, to: {} }, ...(r.stopTimes || []).map(x => ({ from: x.place, to: {} }))]);
       $('#stopAl').innerHTML = al.map((a, i) => alertBox(a, 's' + i)).join(''); toggles($('#stopAl'));
       const groups = new Map();
       (r.stopTimes || []).forEach(s => {
-        if (s.place.departure == null && s.place.scheduledDeparture == null) return;
+        if ((s.place.departure == null && s.place.scheduledDeparture == null) || depT(s) < Date.now() - 60000) return;
         const k = lineName(s) + '|' + (s.headsign || s.tripTo?.name || '');
         if (!groups.has(k)) groups.set(k, []);
         groups.get(k).push(s);
@@ -1009,7 +1023,7 @@ async function findLines(q) {
 function openLine(g) { st.line = g; st.lineDir = 0; nav('line', () => renderLine(g, 0)); }
 async function renderLine(g, di) {
   st.lineDir = di;
-  pane.innerHTML = hd(`${badge(g)} ${esc(modeName(g.mode))}`) + (g.longName ? `<div class="muted" style="font-size:14px;margin:-6px 0 8px">${esc(g.longName)}</div>` : '')
+  pane.innerHTML = hd(`${badge(g)} ${esc(modeName(g.mode))}`, PUSH ? `<button class="icb bell" id="wline" aria-label="${T('watchB')}">${I.bell}</button>` : '') + (g.longName ? `<div class="muted" style="font-size:14px;margin:-6px 0 8px">${esc(g.longName)}</div>` : '')
     + `<h3>${T('directions')}</h3><div class="ttl">${g.dirs.map((d, i) => `<button data-d="${i}" class="${i === di ? 'on' : ''}"><small>${T('towards')}</small> ${esc(d.last)}</button>`).join('')}</div><div id="lineBody"><div class="skel"></div></div>`;
   pane.querySelectorAll('[data-d]').forEach(b => b.onclick = () => renderLine(g, +b.dataset.d));
   vehFocus = sg => sg.name === g.routeShortName;
@@ -1024,6 +1038,8 @@ async function renderLine(g, di) {
     (r.segments || []).forEach(sg => { const pl = resp.polylines?.[sg.polyline]; const pts = pl ? geom(pl.polyline) : []; if (pts.length) { L.polyline(pts, { color: '#fff', weight: 10 }).addTo(routeL); L.polyline(pts, { color: col, weight: 6 }).addTo(routeL); } });
     stops.forEach(p => L.circleMarker(ll(p), { radius: 4, color: col, weight: 3, fillColor: '#fff', fillOpacity: 1 }).on('click', () => openStop(p)).addTo(routeL));
     fitTo(routeL.getBounds());
+    const wItems = [stops[0], stops[Math.floor(stops.length / 2)]].filter(x => x?.stopId).map(x => ({ stopId: x.stopId, name: x.name, line: g.routeShortName }));
+    const wb = $('#wline'); if (wb && wItems.length) { wb.classList.toggle('on', isWatched(wItems[0])); wb.onclick = () => toggleWatch(wItems, wb); }
     $('#lineBody').innerHTML = `<h3>${T('stopsOnLine', stops.length)}</h3><ul class="stops" style="--c:${col}">${stops.map((p, i) => `<li data-si="${i}"><span>${esc(p.name)}</span>${I.chev}</li>`).join('')}</ul>`;
     pane.querySelectorAll('[data-si]').forEach(li => li.onclick = () => openStop(stops[li.dataset.si]));
   } catch (e) { const el = $('#lineBody'); if (el) el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
@@ -1099,7 +1115,7 @@ function liveAlerts(it) {
     out.push({ id: `b${i}`, at: tAt(l.from, 'dep', l) - 120000, title: nm, body: T('pushBoard', nm, h), trip: tr(l.from, 'dep', -120000) });
     const n = Math.min(O.alertStops, last);
     if (n > 1 && last - n >= 1) { const s = stops[last - n]; out.push({ id: `p${i}`, at: tAt(s, 'dep', l), title: nm, body: T('pushPre', n, l.to.name), trip: tr(s, 'dep', 0) }); }
-    if (last >= 1) { const s = stops[last - 1]; out.push({ id: `o${i}`, at: tAt(s, 'dep', l), title: nm, body: T('pushOff', l.to.name), trip: tr(s, 'dep', 0) }); }
+    if (last >= 1) { const s = stops[last - 1]; out.push({ id: `o${i}`, at: tAt(s, 'dep', l), title: nm, body: T('pushAlight', l.to.name), trip: tr(s, 'dep', 0) }); }
   });
   const end = it.legs.at(-1);
   out.push({ id: 'end', at: +new Date(end.endTime), title: 'Peron', body: T('pushArrive', st.to?.name || end.to.name), trip: !isStreet(end) && end.tripId && end.to.stopId ? { tripId: end.tripId, stopId: end.to.stopId, kind: 'arr', offset: 0 } : null });
@@ -1108,7 +1124,7 @@ function liveAlerts(it) {
 
 /* ---------- traseu live ---------- */
 async function startLive(it) {
-  live = { it, i: 0, idx: 0, alerted: {}, banner: null };
+  live = { it, i: 0, idx: 0, alerted: {}, banner: null, startedAt: Date.now() };
   const now = Date.now();
   while (live.i < it.legs.length - 1 && new Date(it.legs[live.i].endTime) < now) live.i++;
   try { live.ctx = new (window.AudioContext || window.webkitAudioContext)(); await live.ctx.resume(); } catch {}
@@ -1128,6 +1144,7 @@ async function startLive(it) {
 }
 function stopLive() {
   if (!live) return;
+  recordTrip(); followStop(live.done);
   clearInterval(live.timer); clearInterval(live.rt);
   try { live.lock?.release(); } catch {}
   try { live.ctx?.close(); } catch {}
@@ -1176,6 +1193,7 @@ function liveTick() {
   let body = '';
   if (live.done) {
     bar('#16884F', '#fff', I.flag, T('arrived'), esc(st.to?.name || l.to.name));
+    if (!live.endDone) { live.endDone = true; recordTrip(); followStop(true); }
     body = `<p>${T('arrivedDest')}</p>`;
   } else if (isStreet(l)) {
     const d = pos ? dist(pos, ll(l.to)) : null, nx = legs[live.i + 1], w = walkInfo(l, pos);
@@ -1230,12 +1248,15 @@ function liveTick() {
   pane.innerHTML = (live.banner ? `<div class="alert">${I.bell}<span>${esc(live.banner)}</span></div>` : '') + lal.map((a, i) => alertBox(a, 'l' + i)).join('') + body
     + (nextLegs.length && !live.done ? `<h3>${T('next')}</h3>${nextLegs.map(x => `<div class="row"><span class="ic">${I[MK(x.mode)]}</span><span class="tx"><div>${badge(x)} ${esc(x.from.name)}</div><small>${fmt(x.startTime, x.from.tz)} ${liveTag(x)}</small></span></div>`).join('')}` : '')
     + `<div class="lnav"><button class="btn ghost" id="lPrev" ${live.i === 0 ? 'disabled' : ''}>${T('prevLeg')}</button><button class="btn ghost" id="lNext">${live.i < legs.length - 1 ? T('nextLeg') : T('iArrived')}</button></div>
+       ${PUSH ? `<div class="lnav"><button class="btn ${live.share ? '' : 'ghost'}" id="lFollow">${I.follow.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px"')} ${T('follow')}</button></div>` : ''}
        <div class="lnav"><button class="btn ghost" id="lShare">${I.share.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px"')} ${T('shareEta')}</button><button class="btn stop" id="lStop">${T('stopLive')}</button></div>
        ${pos ? '' : `<p class="muted" style="font-size:13px">${T('noGps')}</p>`}`;
   $('#lPrev').onclick = () => setLeg(live.i - 1);
   $('#lNext').onclick = () => live.i < legs.length - 1 ? setLeg(live.i + 1) : (live.done = true, liveTick());
   $('#lStop').onclick = stopLive;
   $('#lShare').onclick = () => shareEta(live.it);
+  $('#lFollow')?.addEventListener('click', followStart);
+  if (!live.done) followUpdate();
   toggles(pane);
   pane.querySelector('.stops li.now')?.scrollIntoView({ block: 'nearest' });
 }
@@ -1255,11 +1276,317 @@ async function refreshRT() {
   liveTick();
 }
 
+/* ======================= extensii v6 ======================= */
+Object.assign(L10N.ro, {
+  tools: 'Unelte', depsT: 'Plecari programate', depsSub: 'Notificare cand trebuie sa pleci', histT: 'Calatoriile mele', histSub: 'Istoric si statistici',
+  depsInfo: 'Primesti o notificare exact cand trebuie sa pleci, calculata cu intarzierile in timp real.', addDep: 'Adauga plecare', noDeps2: 'Nicio plecare programata.',
+  depFrom: 'De unde', depTo: 'Unde', arriveBy: 'Vreau sa ajung la', repeat: 'Repeta', once: 'O singura data', date: 'Data', save: 'Salveaza', saved: 'Salvat.', depArr: t => `sosire ${t}`,
+  wd: ['D', 'L', 'Ma', 'Mi', 'J', 'V', 'S'], weekdays: 'L-V', everyDay: 'zilnic', pickPlace: 'Alege locul', needPush: 'Necesita notificari active.',
+  watchOn: 'Vei primi notificari la perturbari.', watchOff: 'Alertele de perturbari au fost oprite.', watchB: 'Alerte perturbari',
+  follow: 'Urmareste-ma', followMsg: (d, l) => `Sunt pe drum spre ${d}. Ma poti urmari aici: ${l}`, followOn: 'Linkul de urmarire este activ.', myName: 'Numele tau', myNameSub: 'apare cand trimiti linkul de urmarire',
+  offline: t => `Fara semnal, date salvate la ${t}`, offlineNow: 'Fara semnal',
+  histEmpty: 'Calatoriile apar aici dupa ce folosesti traseul live.', thisMonth: 'Luna aceasta', lastMonth: 'Luna trecuta', allTime: 'Tot', tripsN: n => pl(n, 'calatorie', 'calatorii'),
+  timeOnTransit: 'timp pe drum', kmTransit: 'km cu transportul public', kmWalk: 'km pe jos', co2: kg => `~${kg} kg CO2 economisit fata de masina (estimare)`, byMode: 'Pe mijloace de transport',
+  siriH: 'Comenzi Siri', siriInfo: 'In aplicatia Scurtaturi: + > Adauga actiune > Deschide URL-uri > lipeste linkul. Denumeste scurtatura, de exemplu „Du-ma acasa”, si spune „Hey Siri, du-ma acasa”. Linkul se deschide in Safari.', copyLink: 'Copiaza link', linkCopied: 'Link copiat.',
+  wxT: 'Vremea', feels: t => `se simte ca ${t}`, wind: 'Vant', gusts: 'rafale', humidity: 'Umiditate', next24: 'Urmatoarele 24 de ore', nextDays: 'Urmatoarele zile', wxWarnH: 'Atentie la vreme', wxNoWarn: 'Fara fenomene periculoase in urmatoarele 24 de ore.',
+  wxNote: 'Avertizari calculate din prognoza, nu sunt avertizarile oficiale.', wxOfficial: 'Avertizari oficiale: MeteoAlarm', wxCredit: 'Date meteo: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0)', wxErr: 'Nu am putut incarca vremea.',
+  w_storm: 'Furtuna', w_rain: 'Ploaie abundenta', w_ice: 'Polei / ploaie inghetata', w_snow: 'Ninsoare abundenta', w_wind: 'Vant puternic', w_heat: 'Canicula', w_cold: 'Ger', w_fog: 'Ceata', today2: 'Azi', tomorrow2: 'Maine',
+  wc: { 0: 'Senin', 1: 'Mai mult senin', 2: 'Partial noros', 3: 'Innorat', 45: 'Ceata', 48: 'Ceata cu chiciura', 51: 'Burnita', 53: 'Burnita', 55: 'Burnita densa', 56: 'Burnita inghetata', 57: 'Burnita inghetata', 61: 'Ploaie slaba', 63: 'Ploaie', 65: 'Ploaie puternica', 66: 'Ploaie inghetata', 67: 'Ploaie inghetata', 71: 'Ninsoare slaba', 73: 'Ninsoare', 75: 'Ninsoare puternica', 77: 'Graupel', 80: 'Averse', 81: 'Averse', 82: 'Averse puternice', 85: 'Averse de ninsoare', 86: 'Averse de ninsoare', 95: 'Furtuna', 96: 'Furtuna cu grindina', 99: 'Furtuna cu grindina' }
+});
+Object.assign(L10N.en, {
+  tools: 'Tools', depsT: 'Scheduled departures', depsSub: 'Get notified when to leave', histT: 'My trips', histSub: 'History and stats',
+  depsInfo: 'You get a notification exactly when you need to leave, based on real-time delays.', addDep: 'Add departure', noDeps2: 'No scheduled departures.',
+  depFrom: 'From', depTo: 'To', arriveBy: 'Arrive by', repeat: 'Repeat', once: 'Once', date: 'Date', save: 'Save', saved: 'Saved.', depArr: t => `arrive ${t}`,
+  wd: ['S', 'M', 'T', 'W', 'T', 'F', 'S'], weekdays: 'Mon-Fri', everyDay: 'daily', pickPlace: 'Choose place', needPush: 'Requires notifications.',
+  watchOn: 'You will be notified about disruptions.', watchOff: 'Disruption alerts turned off.', watchB: 'Disruption alerts',
+  follow: 'Follow me', followMsg: (d, l) => `On my way to ${d}. Follow me here: ${l}`, followOn: 'The follow link is active.', myName: 'Your name', myNameSub: 'shown when you share a follow link',
+  offline: t => `Offline, data saved at ${t}`, offlineNow: 'Offline',
+  histEmpty: 'Trips appear here after you use live trips.', thisMonth: 'This month', lastMonth: 'Last month', allTime: 'All', tripsN: n => `${n} ${n === 1 ? 'trip' : 'trips'}`,
+  timeOnTransit: 'travel time', kmTransit: 'km by public transport', kmWalk: 'km walked', co2: kg => `~${kg} kg CO2 saved vs. driving (estimate)`, byMode: 'By transport mode',
+  siriH: 'Siri shortcuts', siriInfo: 'In the Shortcuts app: + > Add Action > Open URLs > paste the link. Name the shortcut, for example "Take me home", then say "Hey Siri, take me home". The link opens in Safari.', copyLink: 'Copy link', linkCopied: 'Link copied.',
+  wxT: 'Weather', feels: t => `feels like ${t}`, wind: 'Wind', gusts: 'gusts', humidity: 'Humidity', next24: 'Next 24 hours', nextDays: 'Next days', wxWarnH: 'Weather warnings', wxNoWarn: 'No hazardous weather in the next 24 hours.',
+  wxNote: 'Warnings are derived from the forecast, not official warnings.', wxOfficial: 'Official warnings: MeteoAlarm', wxCredit: 'Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0)', wxErr: 'Could not load the weather.',
+  w_storm: 'Thunderstorm', w_rain: 'Heavy rain', w_ice: 'Freezing rain / ice', w_snow: 'Heavy snow', w_wind: 'Strong wind', w_heat: 'Heat', w_cold: 'Severe cold', w_fog: 'Fog', today2: 'Today', tomorrow2: 'Tomorrow',
+  wc: { 0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Fog', 48: 'Rime fog', 51: 'Drizzle', 53: 'Drizzle', 55: 'Dense drizzle', 56: 'Freezing drizzle', 57: 'Freezing drizzle', 61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Freezing rain', 67: 'Freezing rain', 71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains', 80: 'Showers', 81: 'Showers', 82: 'Heavy showers', 85: 'Snow showers', 86: 'Snow showers', 95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Thunderstorm with hail' }
+});
+Object.assign(I, {
+  dep: sv('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6M12 2v3"/>'),
+  hist: sv('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+  bellOff: sv('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/>'),
+  follow: sv('<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><path d="M19 3l2-2M21 7h2"/>'),
+  link: sv('<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>'),
+  trash: sv('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+  plus: sv('<path d="M12 5v14M5 12h14"/>')
+});
+const WXI = {
+  sun: sv('<circle cx="12" cy="12" r="4.5" fill="#FFC72C" stroke="#E0A800"/><path stroke="#E0A800" d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: sv('<path fill="#C9D3E3" stroke="#8A97A8" d="M19 14.5A7.5 7.5 0 1 1 9.5 5a6 6 0 0 0 9.5 9.5z"/>'),
+  partly: sv('<circle cx="9" cy="9" r="3.5" fill="#FFC72C" stroke="#E0A800"/><path stroke="#E0A800" d="M9 2.5v1.5M2.5 9H4M4.4 4.4l1 1M13.6 4.4l-1 1"/><path fill="#E8EDF4" stroke="#8A97A8" d="M8 20h9.5a3.5 3.5 0 0 0 0-7 5 5 0 0 0-9.6 1.5A2.8 2.8 0 0 0 8 20z"/>'),
+  cloud: sv('<path fill="#E8EDF4" stroke="#8A97A8" d="M7 19h10.5a4 4 0 0 0 .3-8A6 6 0 0 0 6.2 12.6 3.3 3.3 0 0 0 7 19z"/>'),
+  fog: sv('<path stroke="#8A97A8" d="M4 9h16M3 13h18M5 17h14M7 21h10"/>'),
+  rain: sv('<path fill="#E8EDF4" stroke="#8A97A8" d="M7 15h10.5a4 4 0 0 0 .3-8A6 6 0 0 0 6.2 8.6 3.3 3.3 0 0 0 7 15z"/><path stroke="#3B82C4" d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/>'),
+  snow: sv('<path fill="#E8EDF4" stroke="#8A97A8" d="M7 15h10.5a4 4 0 0 0 .3-8A6 6 0 0 0 6.2 8.6 3.3 3.3 0 0 0 7 15z"/><path stroke="#7DB7EA" d="M8 18v3M6.5 19.5h3M12 18v3M10.5 19.5h3M16 18v3M14.5 19.5h3"/>'),
+  storm: sv('<path fill="#C9D3E3" stroke="#5E6E85" d="M7 14h10.5a4 4 0 0 0 .3-8A6 6 0 0 0 6.2 7.6 3.3 3.3 0 0 0 7 14z"/><path fill="#FFC72C" stroke="#E0A800" d="M12.5 13l-3 5h3l-1.5 4 4.5-6h-3l1.5-3z"/>')
+};
+const wxIcon = (c, day = 1) => c === 0 || c === 1 ? (day ? WXI.sun : WXI.moon) : c === 2 ? (day ? WXI.partly : WXI.cloud) : c === 3 ? WXI.cloud : c === 45 || c === 48 ? WXI.fog : c >= 95 ? WXI.storm : (c >= 71 && c <= 77) || c === 85 || c === 86 ? WXI.snow : c >= 51 ? WXI.rain : WXI.cloud;
+const tzName = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'Europe/Bucharest'; } };
+const rand = n => b64e(crypto.getRandomValues(new Uint8Array(n)));
+const b64e = u => btoa(String.fromCharCode(...u)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const baseUrl = () => location.origin + location.pathname.replace(/[^/]*$/, '');
+async function copyText(t, okMsg) { try { await navigator.clipboard.writeText(t); toast(okMsg); } catch { prompt('', t); } }
+async function pushPost(path, body) {
+  const sub = await pushSubscribe();
+  const r = await fetch(PUSH + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sub: sub.toJSON(), lang: O.lang, tz: tzName(), ...body }) });
+  if (!r.ok) throw new Error(T('srvErr', r.status));
+}
+
+/* ---------- mod fara semnal ---------- */
+const PC_LIM = { '/v6/plan': 6, '/v6/stoptimes': 25, '/v6/trip': 10 };
+function pcPut(path, url, d) {
+  const lim = PC_LIM[path]; if (!lim) return;
+  const idx = store.get('pcidx', {}), list = (idx[path] || []).filter(u => u !== url);
+  list.unshift(url);
+  while (list.length > lim) { try { localStorage.removeItem('pc:' + list.pop()); } catch {} }
+  idx[path] = list;
+  try { localStorage.setItem('pc:' + url, JSON.stringify({ t: Date.now(), d })); store.set('pcidx', idx); }
+  catch { Object.values(idx).flat().forEach(u => { try { localStorage.removeItem('pc:' + u); } catch {} }); store.set('pcidx', {}); }
+}
+const pcGet = url => { try { return JSON.parse(localStorage.getItem('pc:' + url)); } catch { return null; } };
+function setOffline(t) {
+  st.offlineAt = t;
+  const e = $('#offline'); if (!e) return;
+  e.hidden = !t && navigator.onLine;
+  e.textContent = t ? T('offline', new Date(t).toLocaleTimeString(LOC(), { hour: '2-digit', minute: '2-digit' })) : T('offlineNow');
+}
+addEventListener('online', () => { setOffline(null); loadWeather(true); });
+addEventListener('offline', () => setOffline(st.offlineAt || null));
+async function prefetchTT() {
+  if (!navigator.onLine) return;
+  const today = new Date().toDateString();
+  for (const p of store.get('fstops', []).slice(0, 6)) {
+    const k = 'tt:' + p.stopId, cur = store.get(k, null);
+    if (cur && cur.day === today) continue;
+    try {
+      const r = await api('/v6/stoptimes', { stopId: p.stopId, time: new Date().toISOString(), window: 86400, n: 1, language: O.lang }, 600000);
+      store.set(k, { day: today, list: (r.stopTimes || []).slice(0, 500).map(s => ({ routeShortName: s.routeShortName, displayName: s.displayName, routeColor: s.routeColor, routeTextColor: s.routeTextColor, mode: s.mode, headsign: s.headsign, realTime: false, place: { departure: s.place.scheduledDeparture || s.place.departure, scheduledDeparture: s.place.scheduledDeparture, tz: s.place.tz, name: s.place.name } })) });
+    } catch {}
+  }
+}
+const ttFallback = stopId => ({ stopTimes: (store.get('tt:' + stopId, null)?.list || []).filter(s => new Date(s.place.departure) > Date.now() - 60000) });
+
+/* ---------- vremea ---------- */
+const WX = { d: null, at: 0, pos: null, city: '', warn: [] };
+async function loadWeather(force) {
+  const pos = st.loc || [map.getCenter().lat, map.getCenter().lng];
+  if (!force && WX.d && Date.now() - WX.at < 15 * 60000 && WX.pos && dist(pos, WX.pos) < 5000) return;
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${pos[0].toFixed(3)}&longitude=${pos[1].toFixed(3)}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_gusts_10m,is_day&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_gusts_10m,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3&wind_speed_unit=kmh`;
+    const r = await fetch(u); if (!r.ok) throw 0;
+    WX.d = await r.json(); WX.at = Date.now(); WX.pos = pos;
+    WX.warn = wxWarnings(WX.d);
+    renderWxChip();
+    try {
+      const g = await api('/v1/reverse-geocode', { place: pos.join(','), numResults: 1, language: O.lang }, 3600000);
+      const ar = (g[0]?.areas || []).filter(a => a.adminLevel >= 6 && a.adminLevel <= 8).sort((a, b) => b.adminLevel - a.adminLevel);
+      WX.city = ar[0]?.name || (g[0]?.areas || []).at(-1)?.name || '';
+    } catch {}
+    if (view === 'weather') renderWeather();
+  } catch { if (view === 'weather') renderWeather(); }
+}
+const wxTime = (d, s) => Date.parse(s + 'Z') - d.utc_offset_seconds * 1000;
+const wxHM = (d, ms) => new Date(ms + d.utc_offset_seconds * 1000).toISOString().slice(11, 16);
+function wxWarnings(d) {
+  const h = d.hourly, now = Date.now(), out = [];
+  const typeOf = i => {
+    const c = h.weather_code[i], g = h.wind_gusts_10m[i], p = h.precipitation[i], t = h.temperature_2m[i], r = [];
+    if (c >= 95) r.push(['storm', 3, null]);
+    if ([56, 57, 66, 67].includes(c)) r.push(['ice', 3, null]);
+    if (p >= 7 || c === 65 || c === 82) r.push(['rain', 2, p]);
+    if (c === 75 || c === 86) r.push(['snow', 2, p]);
+    if (g >= 60) r.push(['wind', g >= 90 ? 3 : 2, g]);
+    if (t >= 35) r.push(['heat', 2, t]);
+    if (t <= -15) r.push(['cold', 2, t]);
+    if (c === 45 || c === 48) r.push(['fog', 1, null]);
+    return r;
+  };
+  const open = {};
+  h.time.forEach((s, i) => {
+    const t = wxTime(d, s); if (t < now - 3600000 || t > now + 24 * 3600000) return;
+    const found = typeOf(i), seen = new Set();
+    found.forEach(([k, sev, v]) => {
+      seen.add(k);
+      if (open[k] && open[k].to === t - 3600000) { open[k].to = t; open[k].sev = Math.max(open[k].sev, sev); if (v != null) open[k].v = k === 'cold' ? Math.min(open[k].v ?? v, v) : Math.max(open[k].v ?? v, v); }
+      else { open[k] = { k, sev, from: t, to: t, v }; out.push(open[k]); }
+    });
+  });
+  return out.sort((a, b) => b.sev - a.sev || a.from - b.from);
+}
+function renderWxChip() {
+  const c = WX.d?.current, b = $('#wx'); if (!b) return;
+  if (!c) { b.hidden = true; return; }
+  b.hidden = false;
+  const sev = Math.max(0, ...WX.warn.map(w => w.sev));
+  b.innerHTML = `${wxIcon(c.weather_code, c.is_day)}<b>${Math.round(c.temperature_2m)}&deg;</b>${sev >= 2 ? `<i class="wxdot${sev >= 3 ? ' s3' : ''}"></i>` : ''}`;
+  b.setAttribute('aria-label', `${T('wxT')}: ${Math.round(c.temperature_2m)} ${T('wc')[c.weather_code] || ''}`);
+}
+$('#wx').onclick = () => { nav('weather', renderWeather); setSheet('full'); loadWeather(); };
+function renderWeather() {
+  const d = WX.d;
+  if (!d) { pane.innerHTML = hd(T('wxT')) + `<p class="muted">${T('wxErr')}</p>`; return; }
+  const c = d.current, h = d.hourly, now = Date.now(), wc = T('wc');
+  const start = Math.max(0, h.time.findIndex(s => wxTime(d, s) >= now - 1800000));
+  const hours = h.time.slice(start, start + 24).map((s, j) => { const i = start + j; return `<div class="wxh"><small>${wxHM(d, wxTime(d, s))}</small>${wxIcon(h.weather_code[i], h.is_day[i])}<b>${Math.round(h.temperature_2m[i])}&deg;</b><small class="pp">${h.precipitation_probability[i] ?? 0}%</small></div>`; }).join('');
+  const SEVC = { 1: '#1F6FB2', 2: '#D9822B', 3: '#C9362B' };
+  const warn = WX.warn.length ? WX.warn.map(w => `<div class="alr" style="--a:${SEVC[w.sev]}">${I.warn}<div><b>${T('w_' + w.k)}</b><div class="ald" style="margin-top:2px">${wxHM(d, w.from)}&ndash;${wxHM(d, w.to + 3600000)}${w.v != null ? `, ${w.k === 'wind' ? `${T('gusts')} ${Math.round(w.v)} km/h` : w.k === 'rain' || w.k === 'snow' ? `${w.v.toFixed(1)} mm/h` : `${Math.round(w.v)}&deg;C`}` : ''}</div></div></div>`).join('') : `<p class="muted" style="font-size:14px">${T('wxNoWarn')}</p>`;
+  const days = d.daily.time.map((s, i) => `<div class="wxd"><span>${i === 0 ? T('today2') : i === 1 ? T('tomorrow2') : new Date(s + 'T12:00').toLocaleDateString(LOC(), { weekday: 'long' })}</span>${wxIcon(d.daily.weather_code[i])}<span class="muted">${d.daily.precipitation_probability_max[i] ?? 0}%</span><b>${Math.round(d.daily.temperature_2m_min[i])}&deg; / ${Math.round(d.daily.temperature_2m_max[i])}&deg;</b></div>`).join('');
+  pane.innerHTML = hd(esc(WX.city || T('wxT')))
+    + `<div class="wxnow">${wxIcon(c.weather_code, c.is_day)}<div><div class="wxt">${Math.round(c.temperature_2m)}&deg;</div><div>${esc(wc[c.weather_code] || '')}</div><small class="muted">${T('feels', Math.round(c.apparent_temperature) + '&deg;')}</small></div>
+      <div class="wxm"><span>${T('wind')} <b>${Math.round(c.wind_speed_10m)} km/h</b></span><span>${T('gusts')} <b>${Math.round(c.wind_gusts_10m)} km/h</b></span><span>${T('humidity')} <b>${c.relative_humidity_2m}%</b></span></div></div>
+    <h3>${T('wxWarnH')}</h3>${warn}
+    <p class="muted" style="font-size:12px;margin:4px 0">${T('wxNote')} <a href="https://meteoalarm.org/" target="_blank" rel="noopener">${T('wxOfficial')}</a></p>
+    <h3>${T('next24')}</h3><div class="wxhs">${hours}</div>
+    <h3>${T('nextDays')}</h3>${days}
+    <p class="credit">${T('wxCredit')}</p>`;
+}
+setInterval(() => loadWeather(), 10 * 60000);
+
+/* ---------- plecari programate ---------- */
+const depsList = () => store.get('deps', []);
+const daysTxt = d => d.date ? new Date(d.date + 'T12:00').toLocaleDateString(LOC(), { day: 'numeric', month: 'short' }) : d.days.length === 7 ? T('everyDay') : d.days.join() === '1,2,3,4,5' ? T('weekdays') : d.days.map(x => T('wd')[x]).join(' ');
+async function syncDeps() { if (!PUSH) throw new Error(T('pushOff')); await pushPost('/depart', { list: depsList() }); }
+function renderDeps() {
+  const list = depsList();
+  pane.innerHTML = hd(T('depsT'), `<button class="icb" id="addDep" aria-label="${T('addDep')}">${I.plus}</button>`) + `<p class="muted" style="font-size:14px;margin-top:-4px">${T('depsInfo')}</p>`
+    + (list.length ? list.map((d, i) => `<div class="row"><span class="ic">${I.dep}</span><button class="tx" data-e="${i}" style="text-align:left"><div>${esc(d.to.name)}</div><small>${T('depArr', d.arrive)}, ${esc(daysTxt(d))} · ${T('from')} ${esc(d.from.name)}</small></button><button class="tg ${d.on ? 'on' : ''}" data-on="${i}" aria-label="on"></button></div>`).join('') : `<p class="muted">${T('noDeps2')}</p>`)
+    + `<button class="btn" id="addDep2" style="width:100%;margin-top:12px">${T('addDep')}</button>`;
+  $('#addDep').onclick = $('#addDep2').onclick = () => editDep(null);
+  pane.querySelectorAll('[data-e]').forEach(b => b.onclick = () => editDep(+b.dataset.e));
+  pane.querySelectorAll('[data-on]').forEach(b => b.onclick = async () => {
+    const l = depsList(); l[b.dataset.on].on = !l[b.dataset.on].on; store.set('deps', l); renderDeps();
+    try { await syncDeps(); } catch (e) { toast(e.message); }
+  });
+}
+function editDep(i) {
+  const l = depsList();
+  const d = st.depEdit = i == null ? { id: rand(6), from: O.home || (st.loc ? { name: T('myLoc'), lat: st.loc[0], lon: st.loc[1] } : null), to: O.work, arrive: '09:00', days: [1, 2, 3, 4, 5], date: null, on: true } : structuredClone(l[i]);
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const draw = () => {
+    pane.innerHTML = hd(i == null ? T('addDep') : T('depsT'), i == null ? '' : `<button class="icb" id="delDep" aria-label="${T('delete')}">${I.trash}</button>`)
+      + `<button class="row" id="dFrom"><span class="ic"><span class="dot o"></span></span><span class="tx"><small>${T('depFrom')}</small><div>${esc(d.from?.name || T('pickPlace'))}</div></span>${I.chev}</button>
+      <button class="row" id="dTo"><span class="ic"><span class="dot d"></span></span><span class="tx"><small>${T('depTo')}</small><div>${esc(d.to?.name || T('pickPlace'))}</div></span>${I.chev}</button>
+      <div class="opt"><span>${T('arriveBy')}</span><input type="time" id="dArr" value="${d.arrive}" class="inp"></div>
+      <div class="opt"><span>${T('repeat')}</span><div class="seg"><button data-r="rep" class="${d.date ? '' : 'on'}">${T('repeat')}</button><button data-r="once" class="${d.date ? 'on' : ''}">${T('once')}</button></div></div>
+      ${d.date ? `<div class="opt"><span>${T('date')}</span><input type="date" id="dDate" value="${d.date}" class="inp"></div>` : `<div class="chk days">${order.map(x => `<button data-wd="${x}" class="${d.days.includes(x) ? 'on' : ''}">${T('wd')[x]}</button>`).join('')}</div>`}
+      <button class="btn" id="dSave" style="width:100%;margin-top:14px">${T('save')}</button>`;
+    $('#dFrom').onclick = () => openSearch('to', p => { d.from = p; draw(); }, T('depFrom'));
+    $('#dTo').onclick = () => openSearch('to', p => { d.to = p; draw(); }, T('depTo'));
+    $('#dArr').onchange = e => d.arrive = e.target.value;
+    $('#dDate')?.addEventListener('change', e => d.date = e.target.value);
+    pane.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { d.date = b.dataset.r === 'once' ? new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) : null; draw(); });
+    pane.querySelectorAll('[data-wd]').forEach(b => b.onclick = () => { const x = +b.dataset.wd; d.days = d.days.includes(x) ? d.days.filter(y => y !== x) : [...d.days, x]; draw(); });
+    $('#delDep')?.addEventListener('click', async () => { store.set('deps', depsList().filter(x => x.id !== d.id)); try { await syncDeps(); } catch {} back(); });
+    $('#dSave').onclick = async () => {
+      if (!d.from || !d.to || !d.arrive || (!d.date && !d.days.length)) return toast(T('pickPlace'));
+      const all = depsList(), k = all.findIndex(x => x.id === d.id);
+      if (k >= 0) all[k] = d; else all.push(d);
+      store.set('deps', all);
+      try { await syncDeps(); toast(T('saved')); } catch (e) { toast(e.message); }
+      back();
+    };
+  };
+  nav('depEdit', draw);
+}
+
+/* ---------- alerte perturbari ---------- */
+const watchList = () => store.get('watch', []);
+const watchKey = w => w.stopId + '|' + (w.line || '');
+const isWatched = w => watchList().some(x => watchKey(x) === watchKey(w));
+async function toggleWatch(items, btn) {
+  if (!PUSH) return toast(T('pushOff'));
+  const on = isWatched(items[0]);
+  let l = watchList().filter(x => !items.some(i => watchKey(i) === watchKey(x)));
+  if (!on) l = [...l, ...items];
+  store.set('watch', l.slice(0, 8));
+  btn?.classList.toggle('on', !on);
+  try { await pushPost('/watch', { items: watchList() }); toast(on ? T('watchOff') : T('watchOn')); } catch (e) { toast(e.message); }
+}
+
+/* ---------- urmareste-ma ---------- */
+async function followStart() {
+  if (!PUSH || !live) return toast(T('pushOff'));
+  const it = live.it, end = it.legs.at(-1), dest = st.to || end.to;
+  if (!live.share) {
+    live.share = { id: rand(18), key: rand(24), last: 0 };
+    const meta = { name: O.myName || '', dest: { name: dest.name, lat: dest.lat, lon: dest.lon }, eta: +new Date(end.endTime),
+      legs: it.legs.map(l => ({ mode: l.mode, name: isStreet(l) ? '' : lineName(l), color: isStreet(l) ? (l.mode === 'WALK' ? '#3B82C4' : '#16884F') : colorOf(l), pts: l.legGeometry?.points || '', prec: l.legGeometry?.precision || 6, start: +new Date(l.startTime), end: +new Date(l.endTime), from: l.from.name, to: l.to.name })) };
+    const r = await fetch(PUSH + '/share/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: live.share.id, key: live.share.key, meta }) });
+    if (!r.ok) { live.share = null; return toast(T('srvErr', r.status)); }
+    followUpdate(true);
+  }
+  const link = baseUrl() + 'share.html#' + live.share.id, text = T('followMsg', dest.name, link);
+  try { if (navigator.share) await navigator.share({ text }); else await copyText(text, T('copied')); } catch {}
+  liveTick();
+}
+function followUpdate(force) {
+  const sh = live?.share; if (!sh || (!force && Date.now() - sh.last < 20000)) return;
+  sh.last = Date.now();
+  fetch(PUSH + '/share/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: sh.id, key: sh.key, pos: st.acc != null ? st.loc : null, eta: +new Date(live.it.legs.at(-1).endTime), leg: live.i }) }).catch(() => {});
+}
+function followStop(arrived) {
+  const sh = live?.share; if (!sh) return;
+  fetch(PUSH + '/share/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: sh.id, key: sh.key, arrived: !!arrived, pos: st.acc != null ? st.loc : null }), keepalive: true }).catch(() => {});
+}
+
+/* ---------- istoric ---------- */
+const polyKm = l => { const p = geom(l.legGeometry); let s = 0; for (let i = 1; i < p.length; i++) s += dist(p[i - 1], p[i]); return s / 1000 || (l.distance || 0) / 1000; };
+function recordTrip() {
+  if (!live || live.recorded) return;
+  const mins2 = (Date.now() - live.startedAt) / 60000;
+  if (mins2 < 3 || (live.i < live.it.legs.length - 1 && !live.done)) return;
+  live.recorded = true;
+  const it = live.it;
+  const trip = { at: live.startedAt, dur: Math.round(mins2), from: st.from?.me ? T('myLoc') : (st.from?.name || it.legs[0].from.name), to: st.to?.name || it.legs.at(-1).to.name,
+    legs: it.legs.map(l => ({ m: isStreet(l) ? (l.mode === 'WALK' ? 'walk' : rentKind(l)) : MK(l.mode), n: isStreet(l) ? '' : lineName(l), c: isStreet(l) ? '' : colorOf(l), km: +polyKm(l).toFixed(2) })) };
+  store.set('trips', [trip, ...store.get('trips', [])].slice(0, 500));
+}
+function renderHist() {
+  const all = store.get('trips', []), per = st.histPer || 'm0', now = new Date();
+  const inPer = t => { const d = new Date(t.at); if (per === 'all') return true; const m = per === 'm0' ? now.getMonth() : (now.getMonth() + 11) % 12, y = per === 'm0' || now.getMonth() > 0 ? now.getFullYear() : now.getFullYear() - 1; return d.getMonth() === m && d.getFullYear() === y; };
+  const list = all.filter(inPer);
+  const km = { walk: 0, transit: 0 }, byM = {};
+  list.forEach(t => t.legs.forEach(l => { if (l.m === 'walk') km.walk += l.km; else if (!['bike', 'scooter', 'car'].includes(l.m)) { km.transit += l.km; byM[l.m] = (byM[l.m] || 0) + l.km; } }));
+  const totMin = list.reduce((s, t) => s + t.dur, 0), mx = Math.max(1, ...Object.values(byM));
+  pane.innerHTML = hd(T('histT')) + `<div class="seg wide" id="hPer">${[['m0', T('thisMonth')], ['m1', T('lastMonth')], ['all', T('allTime')]].map(([v, t]) => `<button data-v="${v}" class="${per === v ? 'on' : ''}">${t}</button>`).join('')}</div>`
+    + (list.length ? `<div class="stats"><div><b>${list.length}</b><small>${T('tripsN', list.length).replace(/^\d+\s/, '')}</small></div><div><b>${durS(totMin * 60)}</b><small>${T('timeOnTransit')}</small></div><div><b>${km.transit.toFixed(1)}</b><small>${T('kmTransit')}</small></div><div><b>${km.walk.toFixed(1)}</b><small>${T('kmWalk')}</small></div></div>
+      <p class="muted" style="font-size:14px">${T('co2', (km.transit * 0.12).toFixed(1))}</p>
+      <h3>${T('byMode')}</h3>${Object.entries(byM).sort((a, b) => b[1] - a[1]).map(([m, v]) => `<div class="bar2"><span>${I[m] || I.bus}${T('M_' + m)}</span><i style="width:${Math.max(4, v / mx * 100)}%;background:${MC[m] || '#1F6FB2'}"></i><b>${v.toFixed(1)} km</b></div>`).join('')}
+      <h3>${T('recent')}</h3>${list.slice(0, 40).map(t => `<div class="row"><span class="ic">${I.route}</span><span class="tx"><div>${esc(t.to)}</div><small>${new Date(t.at).toLocaleDateString(LOC(), { day: 'numeric', month: 'short' })}, ${t.dur} min · ${t.legs.filter(l => l.n).map(l => esc(l.n)).join(' › ')}</small></span><button class="x" data-dt="${t.at}" aria-label="${T('delete')}">${I.close}</button></div>`).join('')}`
+      : `<p class="muted">${T('histEmpty')}</p>`);
+  pane.querySelectorAll('#hPer button').forEach(b => b.onclick = () => { st.histPer = b.dataset.v; renderHist(); });
+  pane.querySelectorAll('[data-dt]').forEach(b => b.onclick = () => { store.set('trips', store.get('trips', []).filter(t => String(t.at) !== b.dataset.dt)); renderHist(); });
+}
+
+/* ---------- linkuri Siri si deschidere directa ---------- */
+const siriLink = p => `${baseUrl()}?to=${(+p.lat).toFixed(5)},${(+p.lon).toFixed(5)}&name=${encodeURIComponent(p.name)}`;
+function handleUrl() {
+  const q = new URLSearchParams(location.search);
+  if (![...q.keys()].length) return;
+  history.replaceState(null, '', location.pathname);
+  const to = (q.get('to') || '').split(',').map(Number);
+  if (to.length === 2 && to.every(Number.isFinite)) return routeTo({ name: q.get('name') || T('pointOnMap'), lat: to[0], lon: to[1] });
+  if (q.get('go') === 'home' && O.home) return routeTo(O.home);
+  if (q.get('go') === 'work' && O.work) return routeTo(O.work);
+}
+
 /* ---------- pornire ---------- */
 applyStatic();
+setOffline(navigator.onLine ? null : 0);
 setSheet('half', true);
 renderHome();
 loadMapStops(); loadVehicles(); loadRentals();
 startWatch();
 if (st.loc) drawMe();
+loadWeather();
+setTimeout(prefetchTT, 4000);
+handleUrl();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
