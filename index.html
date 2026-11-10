@@ -2,10 +2,10 @@
 <html lang="ro">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="theme-color" content="#14213D">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Peron">
 <title>Peron</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -18,73 +18,42 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="top">
-  <h1>Peron</h1>
-</header>
+<div id="map"></div>
 
-<main>
-  <section id="v-plan" class="view active">
-    <div class="od">
-      <div class="field">
-        <span class="dot from"></span>
-        <input id="from" placeholder="De unde" autocomplete="off" enterkeyhint="next">
-        <button class="ic" id="here" aria-label="Locatia mea">&#9678;</button>
-      </div>
-      <div class="field">
-        <span class="dot to"></span>
-        <input id="to" placeholder="Unde" autocomplete="off" enterkeyhint="search">
-        <button class="ic" id="swap" aria-label="Inverseaza">&#8645;</button>
-      </div>
-      <ul class="sugg" id="sugg" hidden></ul>
-      <div class="when">
-        <select id="mode">
-          <option value="now">Acum</option>
-          <option value="dep">Plecare la</option>
-          <option value="arr">Sosire la</option>
-        </select>
-        <input type="datetime-local" id="time" hidden>
-        <button class="go" id="go">Cauta traseu</button>
-      </div>
+<div class="top" id="top">
+  <button class="pill" id="openSearch"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg><span>Unde mergi?</span></button>
+  <button class="round" id="openOpts" aria-label="Optiuni"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+</div>
+
+<div class="livebar" id="livebar" hidden></div>
+
+<button class="fab" id="recenter" aria-label="Centreaza pe locatia mea"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg></button>
+
+<section class="sheet" id="sheet">
+  <div class="grab" id="grab"><span></span></div>
+  <div class="pane" id="pane"></div>
+</section>
+
+<div class="overlay" id="search" hidden>
+  <div class="shd">
+    <button class="icb" id="closeSearch" aria-label="Inchide"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="fields">
+      <label class="f" id="fFromWrap"><span class="dot o"></span><input id="fFrom" placeholder="Punct de plecare" autocomplete="off"></label>
+      <label class="f" id="fToWrap"><span class="dot d"></span><input id="fTo" placeholder="Destinatie" autocomplete="off"></label>
     </div>
-    <div id="results"></div>
-  </section>
+    <button class="icb" id="swap" aria-label="Inverseaza"><svg viewBox="0 0 24 24"><path d="M8 4v15M4 15l4 4 4-4M16 20V5M12 9l4-4 4 4"/></svg></button>
+  </div>
+  <ul class="list" id="sugg"></ul>
+</div>
 
-  <section id="v-detail" class="view">
-    <div class="bar"><button class="back" id="back">Inapoi</button><button class="start" id="start">Pornesc</button><button class="star" id="fav" aria-label="Salveaza traseul">&#9734;</button></div>
-    <div id="map"></div>
-    <div id="live" hidden></div>
-    <ol id="strip"></ol>
-  </section>
+<div class="overlay" id="opts" hidden></div>
 
-  <section id="v-dep" class="view">
-    <div class="od">
-      <div class="field">
-        <span class="dot stop"></span>
-        <input id="stopq" placeholder="Cauta statie" autocomplete="off" enterkeyhint="search">
-        <button class="ic" id="near" aria-label="Plecari langa mine">&#9678;</button>
-      </div>
-      <ul class="sugg" id="stopsugg" hidden></ul>
-    </div>
-    <div id="deps"></div>
-  </section>
+<div class="pick" id="pick" hidden>
+  <div class="pin"><svg viewBox="0 0 24 24"><path d="M12 22s7-7.2 7-12.5A7 7 0 0 0 5 9.5C5 14.8 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.5"/></svg></div>
+  <div class="pickbar"><span>Muta harta pe locul dorit</span><div><button class="btn ghost" id="pickNo">Renunta</button><button class="btn" id="pickOk">Alege locul</button></div></div>
+</div>
 
-  <section id="v-fav" class="view">
-    <div id="favs"></div>
-  </section>
-</main>
-
-<nav class="tabs">
-  <button data-v="v-plan" class="on">Traseu</button>
-  <button data-v="v-dep">Plecari</button>
-  <button data-v="v-fav">Salvate</button>
-</nav>
-
-<footer class="credit">
-  Date: <a href="https://transitous.org/sources/" target="_blank" rel="noopener">surse Transitous</a>,
-  &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
-  <a href="https://transitous.org/donate/" target="_blank" rel="noopener">Doneaza Transitous</a>.
-  Contact: <a href="https://github.com/acidburn11/peron" target="_blank" rel="noopener">github.com/acidburn11/peron</a>
-</footer>
+<div class="toast" id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="app.js"></script>
