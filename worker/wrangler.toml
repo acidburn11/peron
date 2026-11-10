@@ -1,0 +1,15 @@
+name = "peron-push"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://acidburn11.github.io"
+VAPID_SUBJECT = "https://github.com/acidburn11/peron"
+
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "Device"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Device"]

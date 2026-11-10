@@ -21,13 +21,13 @@
 <div id="map"></div>
 
 <div class="top" id="top">
-  <button class="pill" id="openSearch"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg><span>Unde mergi?</span></button>
-  <button class="round" id="openOpts" aria-label="Optiuni"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+  <button class="pill" id="openSearch"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg><span data-i18n="whereTo">Unde mergi?</span></button>
+  <button class="round" id="openOpts" data-i18n-al="options" aria-label="Optiuni"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
 </div>
 
 <div class="livebar" id="livebar" hidden></div>
 
-<button class="fab" id="recenter" aria-label="Centreaza pe locatia mea"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg></button>
+<button class="fab" id="recenter" data-i18n-al="recenter" aria-label="Centreaza pe locatia mea"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg></button>
 
 <section class="sheet" id="sheet">
   <div class="grab" id="grab"><span></span></div>
@@ -36,12 +36,12 @@
 
 <div class="overlay" id="search" hidden>
   <div class="shd">
-    <button class="icb" id="closeSearch" aria-label="Inchide"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="icb" id="closeSearch" data-i18n-al="close" aria-label="Inchide"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="fields">
-      <label class="f" id="fFromWrap"><span class="dot o"></span><input id="fFrom" placeholder="Punct de plecare" autocomplete="off"></label>
-      <label class="f" id="fToWrap"><span class="dot d"></span><input id="fTo" placeholder="Destinatie" autocomplete="off"></label>
+      <label class="f" id="fFromWrap"><span class="dot o"></span><input id="fFrom" data-i18n-ph="fromPh" placeholder="Punct de plecare" autocomplete="off"></label>
+      <label class="f" id="fToWrap"><span class="dot d"></span><input id="fTo" data-i18n-ph="toPh" placeholder="Destinatie" autocomplete="off"></label>
     </div>
-    <button class="icb" id="swap" aria-label="Inverseaza"><svg viewBox="0 0 24 24"><path d="M8 4v15M4 15l4 4 4-4M16 20V5M12 9l4-4 4 4"/></svg></button>
+    <button class="icb" id="swap" data-i18n-al="swap" aria-label="Inverseaza"><svg viewBox="0 0 24 24"><path d="M8 4v15M4 15l4 4 4-4M16 20V5M12 9l4-4 4 4"/></svg></button>
   </div>
   <ul class="list" id="sugg"></ul>
 </div>
@@ -50,12 +50,13 @@
 
 <div class="pick" id="pick" hidden>
   <div class="pin"><svg viewBox="0 0 24 24"><path d="M12 22s7-7.2 7-12.5A7 7 0 0 0 5 9.5C5 14.8 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.5"/></svg></div>
-  <div class="pickbar"><span>Muta harta pe locul dorit</span><div><button class="btn ghost" id="pickNo">Renunta</button><button class="btn" id="pickOk">Alege locul</button></div></div>
+  <div class="pickbar"><span data-i18n="pickHint">Muta harta pe locul dorit</span><div><button class="btn ghost" id="pickNo" data-i18n="cancel">Renunta</button><button class="btn" id="pickOk" data-i18n="pickOk">Alege locul</button></div></div>
 </div>
 
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

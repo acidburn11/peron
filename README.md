@@ -1,9 +1,10 @@
 # Peron
 
-Planificator de transport public pentru Europa, fara reclame. PWA pentru iPhone.
+Ad-free public transport planner for Europe, built as a PWA for iPhone. Romanian and English UI.
 
-Date: [Transitous](https://transitous.org/sources/) (MOTIS API), harta © OpenStreetMap.
-Uz personal, necomercial, conform [politicii Transitous](https://transitous.org/api/).
+Data: [Transitous](https://transitous.org/sources/) (MOTIS API). Map: © OpenStreetMap contributors.
+Personal, non-commercial use, following the [Transitous API policy](https://transitous.org/api/).
 
-## Instalare pe iPhone
-Deschide https://acidburn11.github.io/peron/ in Safari > Share > Add to Home Screen.
+- `index.html`, `app.js`, `style.css`, `sw.js`: the app (GitHub Pages)
+- `config.js`: URL of the push server
+- `worker/`: Cloudflare Worker + Durable Object that sends lock screen notifications (Web Push)
