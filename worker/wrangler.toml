@@ -14,6 +14,10 @@ class_name = "Device"
 name = "SHARE"
 class_name = "Share"
 
+[[durable_objects.bindings]]
+name = "BACKUP"
+class_name = "Backup"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Device"]
@@ -21,3 +25,7 @@ new_sqlite_classes = ["Device"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Share"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Backup"]

@@ -708,6 +708,7 @@ function renderOpts() {
     ${['home', 'work'].map(k => opt(T(k), O[k] ? esc(O[k].name) : T('unset'), `<button class="btn ghost" data-p="${k}">${O[k] ? T('change') : T('set')}</button>`)).join('')}
     ${opt(T('history'), '', `<button class="btn ghost" id="clr">${T('delete')}</button>`)}
     ${O.home || O.work ? `<h3>${T('siriH')}</h3>${['home', 'work'].filter(k => O[k]).map(k => opt(T(k), '', `<button class="btn ghost" data-siri="${k}">${I.link.replace('<svg', '<svg style="width:16px;height:16px;vertical-align:-3px"')} ${T('copyLink')}</button>`)).join('')}<p class="muted" style="font-size:13px">${T('siriInfo')}</p>` : ''}
+    ${bkOptsHtml(opt)}
     <p class="credit">${T('credit')}</p></div>`;
   $('#closeOpts').onclick = () => { $('#opts').hidden = true; if (view === 'results' && st.from && st.to) plan(); };
   $('#opts').querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
@@ -729,6 +730,7 @@ function renderOpts() {
     try { await pushSchedule('test', [{ id: 'test', at: Date.now() + 5000, title: 'Peron', body: T('pushTestBody') }]); toast('OK'); } catch (e) { toast(e.message); }
   });
   $('#opts').querySelectorAll('[data-p]').forEach(b => b.onclick = () => openSearch('to', p => { O[b.dataset.p] = p; saveOpts(); renderOpts(); if (view === 'home') renderHome(); }, T(b.dataset.p + 'Addr')));
+  bkOptsBind();
   $('#myName').onchange = e => { O.myName = e.target.value.trim(); saveOpts(); };
   $('#opts').querySelectorAll('[data-siri]').forEach(b => b.onclick = () => copyText(siriLink(O[b.dataset.siri]), T('linkCopied')));
   $('#clr').onclick = () => { store.set('recent', []); store.set('places', []); toast(T('historyCleared')); if (view === 'home') renderHome(); };
@@ -1578,6 +1580,99 @@ function handleUrl() {
   if (q.get('go') === 'work' && O.work) return routeTo(O.work);
 }
 
+/* ---------- backup ---------- */
+Object.assign(L10N.ro, {
+  bkH: 'Backup', bkAuto: 'Backup automat criptat', bkLast: t => `ultimul backup: ${t}`, bkNever: 'inca nu s-a facut', bkCode: 'Cod de recuperare', bkCodeSub: 'Pastreaza-l intr-un loc sigur. Fara el, backup-ul nu poate fi citit.', bkShow: 'Arata codul', bkCopy: 'Copiaza codul',
+  bkExport: 'Exporta in Fisiere', bkImport: 'Importa din fisier', bkRestore: 'Restaureaza cu cod', bkAsk: 'Introdu codul de recuperare', bkConfirm: 'Datele actuale din aplicatie vor fi inlocuite. Continui?',
+  bkDone: 'Datele au fost restaurate.', bkBad: 'Codul nu este corect sau backup-ul nu exista.', bkBadFile: 'Fisierul nu este un backup Peron.', bkNow: 'Fa backup acum', bkOk: 'Backup facut.', bkSaved: 'Fisier creat.'
+});
+Object.assign(L10N.en, {
+  bkH: 'Backup', bkAuto: 'Automatic encrypted backup', bkLast: t => `last backup: ${t}`, bkNever: 'not done yet', bkCode: 'Recovery code', bkCodeSub: 'Keep it somewhere safe. Without it, the backup cannot be read.', bkShow: 'Show code', bkCopy: 'Copy code',
+  bkExport: 'Export to Files', bkImport: 'Import from file', bkRestore: 'Restore with code', bkAsk: 'Enter your recovery code', bkConfirm: 'Current app data will be replaced. Continue?',
+  bkDone: 'Data restored.', bkBad: 'Wrong code or no backup found.', bkBadFile: 'This file is not a Peron backup.', bkNow: 'Back up now', bkOk: 'Backup done.', bkSaved: 'File created.'
+});
+const BK_KEYS = ['opts', 'favs', 'recent', 'places', 'fstops', 'deps', 'watch', 'trips'];
+const B32 = 'ABCDEFGHJKMNPQRSTVWXYZ0123456789';
+const newCode = () => { const b = crypto.getRandomValues(new Uint8Array(24)); return [...b].map(x => B32[x & 31]).join('').match(/.{4}/g).join('-'); };
+const normCode = c => (c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+const hexOf = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map(b => b.toString(16).padStart(2, '0')).join('');
+async function bkKey(code) {
+  const c = normCode(code), raw = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('peron-key:' + c));
+  return { id: (await hexOf('peron-id:' + c)).slice(0, 40), key: await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']) };
+}
+const bkData = () => Object.fromEntries(BK_KEYS.map(k => [k, store.get(k, null)]).filter(([, v]) => v != null));
+function bkApply(data) { BK_KEYS.forEach(k => { if (data[k] !== undefined) try { localStorage.setItem(k, JSON.stringify(data[k])); } catch {} }); }
+const bkState = () => store.get('bk', null);
+let bkT = null, bkBusy = false;
+function bkSchedule() { if (!PUSH) return; clearTimeout(bkT); bkT = setTimeout(bkUpload, 8000); }
+async function bkUpload(force) {
+  if (!PUSH || bkBusy || (!navigator.onLine && !force)) return;
+  bkBusy = true;
+  try {
+    let b = bkState();
+    if (!b) { b = { code: newCode(), at: 0 }; store.set('bk', b); }
+    const { id, key } = await bkKey(b.code), iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(bkData()))));
+    const all = new Uint8Array(iv.length + ct.length); all.set(iv); all.set(ct, iv.length);
+    let bin = ''; for (let i = 0; i < all.length; i += 8192) bin += String.fromCharCode(...all.subarray(i, i + 8192));
+    const r = await fetch(PUSH + '/backup/put', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, data: btoa(bin), v: Date.now() }) });
+    if (!r.ok) throw new Error(T('srvErr', r.status));
+    store.set('bk', { ...b, at: Date.now() });
+    if (force) toast(T('bkOk'));
+  } catch (e) { if (force) toast(e.message); }
+  bkBusy = false;
+}
+async function bkRestore(code) {
+  try {
+    const { id, key } = await bkKey(code);
+    const r = await fetch(`${PUSH}/backup?id=${id}`, { cache: 'no-store' });
+    if (!r.ok) throw 0;
+    const d = await r.json(), all = Uint8Array.from(atob(d.data), c => c.charCodeAt(0));
+    const data = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12) }, key, all.slice(12))));
+    if (!confirm(T('bkConfirm'))) return;
+    bkApply(data);
+    localStorage.setItem('bk', JSON.stringify({ code: normCode(code).match(/.{1,4}/g).join('-'), at: d.at }));
+    toast(T('bkDone')); setTimeout(() => location.reload(), 800);
+  } catch { toast(T('bkBad')); }
+}
+async function bkExport() {
+  const json = JSON.stringify({ app: 'peron', v: 1, at: new Date().toISOString(), data: bkData() }, null, 1);
+  const name = `peron-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const file = new File([json], name, { type: 'application/json' });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  toast(T('bkSaved'));
+}
+function bkImport() {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = async () => {
+    try {
+      const j = JSON.parse(await inp.files[0].text());
+      if (j.app !== 'peron' || !j.data) throw 0;
+      if (!confirm(T('bkConfirm'))) return;
+      bkApply(j.data); toast(T('bkDone')); setTimeout(() => location.reload(), 800);
+    } catch { toast(T('bkBadFile')); }
+  };
+  inp.click();
+}
+const _storeSet = store.set;
+store.set = (k, v) => { _storeSet(k, v); if (BK_KEYS.includes(k)) bkSchedule(); };
+function bkOptsHtml(opt) {
+  const b = bkState(), last = b?.at ? new Date(b.at).toLocaleString(LOC(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : T('bkNever');
+  return `<h3>${T('bkH')}</h3>
+    ${PUSH ? opt(T('bkAuto'), T('bkLast', last), `<button class="btn ghost" id="bkNow">${T('bkNow')}</button>`) : ''}
+    ${PUSH && b ? `<div class="opt"><span>${T('bkCode')}<small>${T('bkCodeSub')}</small><code id="bkCode" hidden class="bkcode">${b.code}</code></span><div style="display:flex;flex-direction:column;gap:6px"><button class="btn ghost" id="bkShow">${T('bkShow')}</button><button class="btn ghost" id="bkCopy">${T('bkCopy')}</button></div></div>` : ''}
+    <div class="btns" style="flex-wrap:wrap"><button class="btn ghost" id="bkExp">${T('bkExport')}</button><button class="btn ghost" id="bkImp">${T('bkImport')}</button>${PUSH ? `<button class="btn ghost" id="bkRes" style="flex-basis:100%">${T('bkRestore')}</button>` : ''}</div>`;
+}
+function bkOptsBind() {
+  $('#bkNow')?.addEventListener('click', () => bkUpload(true).then(renderOpts));
+  $('#bkShow')?.addEventListener('click', () => { const c = $('#bkCode'); c.hidden = !c.hidden; });
+  $('#bkCopy')?.addEventListener('click', () => copyText(bkState().code, T('copied')));
+  $('#bkExp').onclick = bkExport;
+  $('#bkImp').onclick = bkImport;
+  $('#bkRes')?.addEventListener('click', () => { const c = prompt(T('bkAsk')); if (c && normCode(c).length >= 20) bkRestore(c); else if (c) toast(T('bkBad')); });
+}
+
 /* ---------- pornire ---------- */
 applyStatic();
 setOffline(navigator.onLine ? null : 0);
@@ -1588,5 +1683,6 @@ startWatch();
 if (st.loc) drawMe();
 loadWeather();
 setTimeout(prefetchTT, 4000);
+setTimeout(() => { const b = bkState(); if (PUSH && (!b || Date.now() - b.at > 86400000)) bkUpload(); }, 6000);
 handleUrl();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

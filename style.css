@@ -289,3 +289,4 @@ h3{font-size:14px;color:var(--muted);font-weight:700;margin:18px 0 6px}
 .bar2 i{height:10px;border-radius:5px}
 .chk.days{flex-wrap:nowrap;gap:5px}
 .chk.days button{flex:1;min-width:0;padding:8px 0}
+.bkcode{display:block;margin-top:6px;font:700 15px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--ink);-webkit-user-select:all;user-select:all;word-break:break-all}

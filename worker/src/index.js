@@ -24,6 +24,7 @@ const clean = a => ({
 });
 const json = (d, h, status = 200) => new Response(JSON.stringify(d), { status, headers: { ...h, 'content-type': 'application/json' } });
 const SHARE_ID = /^[A-Za-z0-9_-]{16,48}$/;
+const BK_ID = /^[a-f0-9]{32,64}$/;
 
 export default {
   async fetch(req, env) {
@@ -31,6 +32,12 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
     if (req.method === 'GET' && p === '/key') return new Response(env.VAPID_PUBLIC.trim(), { headers: { ...h, 'content-type': 'text/plain' } });
     if (req.method === 'GET' && p === '/') return new Response('Peron push OK', { headers: h });
+    if (req.method === 'GET' && p === '/backup') {
+      const id = url.searchParams.get('id') || '';
+      if (!BK_ID.test(id)) return json({ error: 'bad id' }, h, 400);
+      const r = await env.BACKUP.get(env.BACKUP.idFromName(id)).fetch('https://do/get');
+      return new Response(await r.text(), { status: r.status, headers: { ...h, 'content-type': 'application/json', 'Cache-Control': 'no-store' } });
+    }
     if (req.method === 'GET' && p === '/share') {
       const id = url.searchParams.get('id') || '';
       if (!SHARE_ID.test(id)) return json({ error: 'bad id' }, h, 400);
@@ -40,8 +47,13 @@ export default {
     if (req.method !== 'POST') return json({ error: 'not found' }, h, 404);
     if (!origins(env).includes(req.headers.get('Origin') || '')) return json({ error: 'forbidden' }, h, 403);
     const raw = await req.text();
-    if (raw.length > 150000) return json({ error: 'too large' }, h, 413);
+    if (raw.length > (p === '/backup/put' ? 1600000 : 150000)) return json({ error: 'too large' }, h, 413);
     let body; try { body = JSON.parse(raw); } catch { return json({ error: 'bad json' }, h, 400); }
+    if (p === '/backup/put') {
+      if (!BK_ID.test(body.id || '') || typeof body.data !== 'string') return json({ error: 'bad request' }, h, 400);
+      const r = await env.BACKUP.get(env.BACKUP.idFromName(body.id)).fetch('https://do/put', { method: 'POST', body: raw });
+      return new Response(await r.text(), { status: r.status, headers: { ...h, 'content-type': 'application/json' } });
+    }
     if (p.startsWith('/share/')) {
       if (!SHARE_ID.test(body.id || '') || typeof body.key !== 'string' || body.key.length < 16) return json({ error: 'bad request' }, h, 400);
       const r = await env.SHARE.get(env.SHARE.idFromName(body.id)).fetch('https://do' + p, { method: 'POST', body: raw });
@@ -257,4 +269,20 @@ export class Share {
     return json({ ok: true }, {});
   }
   async alarm() { const d = await this.s.get('d'); if (!d || d.expires <= Date.now() + 1000) await this.s.deleteAll(); else await this.s.setAlarm(d.expires); }
+}
+
+export class Backup {
+  constructor(state) { this.s = state.storage; }
+  async fetch(req) {
+    const p = new URL(req.url).pathname, now = Date.now();
+    if (p === '/get') {
+      const d = await this.s.get('d');
+      return d ? json(d, {}) : json({ error: 'not found' }, {}, 404);
+    }
+    const b = await req.json();
+    await this.s.put('d', { data: b.data, v: num(b.v) || now, at: now });
+    await this.s.setAlarm(now + 400 * 86400000);
+    return json({ ok: true, at: now }, {});
+  }
+  async alarm() { await this.s.deleteAll(); }
 }
