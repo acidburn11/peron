@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14213D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Peron">
+<title>Peron</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Peron</h1>
+</header>
+
+<main>
+  <section id="v-plan" class="view active">
+    <div class="od">
+      <div class="field">
+        <span class="dot from"></span>
+        <input id="from" placeholder="De unde" autocomplete="off" enterkeyhint="next">
+        <button class="ic" id="here" aria-label="Locatia mea">&#9678;</button>
+      </div>
+      <div class="field">
+        <span class="dot to"></span>
+        <input id="to" placeholder="Unde" autocomplete="off" enterkeyhint="search">
+        <button class="ic" id="swap" aria-label="Inverseaza">&#8645;</button>
+      </div>
+      <ul class="sugg" id="sugg" hidden></ul>
+      <div class="when">
+        <select id="mode">
+          <option value="now">Acum</option>
+          <option value="dep">Plecare la</option>
+          <option value="arr">Sosire la</option>
+        </select>
+        <input type="datetime-local" id="time" hidden>
+        <button class="go" id="go">Cauta traseu</button>
+      </div>
+    </div>
+    <div id="results"></div>
+  </section>
+
+  <section id="v-detail" class="view">
+    <div class="bar"><button class="back" id="back">Inapoi</button><button class="start" id="start">Pornesc</button><button class="star" id="fav" aria-label="Salveaza traseul">&#9734;</button></div>
+    <div id="map"></div>
+    <div id="live" hidden></div>
+    <ol id="strip"></ol>
+  </section>
+
+  <section id="v-dep" class="view">
+    <div class="od">
+      <div class="field">
+        <span class="dot stop"></span>
+        <input id="stopq" placeholder="Cauta statie" autocomplete="off" enterkeyhint="search">
+        <button class="ic" id="near" aria-label="Plecari langa mine">&#9678;</button>
+      </div>
+      <ul class="sugg" id="stopsugg" hidden></ul>
+    </div>
+    <div id="deps"></div>
+  </section>
+
+  <section id="v-fav" class="view">
+    <div id="favs"></div>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button data-v="v-plan" class="on">Traseu</button>
+  <button data-v="v-dep">Plecari</button>
+  <button data-v="v-fav">Salvate</button>
+</nav>
+
+<footer class="credit">
+  Date: <a href="https://transitous.org/sources/" target="_blank" rel="noopener">surse Transitous</a>,
+  &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
+  <a href="https://transitous.org/donate/" target="_blank" rel="noopener">Doneaza Transitous</a>.
+  Contact: <a href="https://github.com/acidburn11/peron" target="_blank" rel="noopener">github.com/acidburn11/peron</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
