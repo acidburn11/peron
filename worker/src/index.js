@@ -25,6 +25,13 @@ const clean = a => ({
 const json = (d, h, status = 200) => new Response(JSON.stringify(d), { status, headers: { ...h, 'content-type': 'application/json' } });
 const SHARE_ID = /^[A-Za-z0-9_-]{16,48}$/;
 const BK_ID = /^[a-f0-9]{32,64}$/;
+async function logIt(env, e) {
+  try {
+    const clip = v => typeof v === 'string' ? v.slice(0, 1500) : v;
+    const entry = Object.fromEntries(Object.entries(e || {}).slice(0, 15).map(([k, v]) => [str(k, 30), clip(typeof v === 'object' ? JSON.stringify(v) : v)]));
+    await env.LOG.get(env.LOG.idFromName('main')).fetch('https://do/add', { method: 'POST', body: JSON.stringify(entry) });
+  } catch {}
+}
 
 export default {
   async fetch(req, env) {
@@ -32,6 +39,11 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
     if (req.method === 'GET' && p === '/key') return new Response(env.VAPID_PUBLIC.trim(), { headers: { ...h, 'content-type': 'text/plain' } });
     if (req.method === 'GET' && p === '/') return new Response('Peron push OK', { headers: h });
+    if (req.method === 'GET' && p === '/logs') {
+      if (!env.LOG_KEY || url.searchParams.get('key') !== env.LOG_KEY.trim()) return json({ error: 'forbidden' }, h, 403);
+      const r = await env.LOG.get(env.LOG.idFromName('main')).fetch('https://do/get?n=' + (url.searchParams.get('n') || '50'));
+      return new Response(await r.text(), { status: r.status, headers: { ...h, 'content-type': 'application/json', 'Cache-Control': 'no-store' } });
+    }
     if (req.method === 'GET' && p === '/backup') {
       const id = url.searchParams.get('id') || '';
       if (!BK_ID.test(id)) return json({ error: 'bad id' }, h, 400);
@@ -49,6 +61,10 @@ export default {
     const raw = await req.text();
     if (raw.length > (p === '/backup/put' ? 1600000 : 150000)) return json({ error: 'too large' }, h, 413);
     let body; try { body = JSON.parse(raw); } catch { return json({ error: 'bad json' }, h, 400); }
+    if (p === '/log') {
+      await logIt(env, { src: 'app', ...body });
+      return json({ ok: true }, h);
+    }
     if (p === '/backup/put') {
       if (!BK_ID.test(body.id || '') || typeof body.data !== 'string') return json({ error: 'bad request' }, h, 400);
       const r = await env.BACKUP.get(env.BACKUP.idFromName(body.id)).fetch('https://do/put', { method: 'POST', body: raw });
@@ -231,11 +247,13 @@ export class Device {
   }
 
   async alarm() {
-    if (!(await this.s.get('sub'))) { await this.s.deleteAll(); return; }
-    await this.runAlerts();
-    if (!(await this.s.get('sub'))) return;
-    await this.runDeps();
-    await this.runWatch();
+    try {
+      if (!(await this.s.get('sub'))) { await this.s.deleteAll(); return; }
+      await this.runAlerts();
+      if (!(await this.s.get('sub'))) return;
+      await this.runDeps();
+      await this.runWatch();
+    } catch (e) { await logIt(this.env, { src: 'server', msg: String(e?.message || e), stack: String(e?.stack || '') }); }
     await this.plan();
   }
 }
@@ -285,4 +303,16 @@ export class Backup {
     return json({ ok: true, at: now }, {});
   }
   async alarm() { await this.s.deleteAll(); }
+}
+
+export class Log {
+  constructor(state) { this.s = state.storage; }
+  async fetch(req) {
+    const u = new URL(req.url), logs = (await this.s.get('logs')) || [];
+    if (u.pathname === '/get') return json(logs.slice(-Math.min(200, +u.searchParams.get('n') || 50)).reverse(), {});
+    const e = await req.json();
+    logs.push({ at: new Date().toISOString(), ...e });
+    await this.s.put('logs', logs.slice(-200));
+    return json({ ok: true }, {});
+  }
 }

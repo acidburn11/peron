@@ -2,3 +2,4 @@ node_modules/
 .wrangler/
 vapid.json
 .dev.vars
+logkey.txt

@@ -11,6 +11,19 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
+const APP_V = '2026.11.11.1';
+let errN = 0;
+const errSeen = new Set();
+function reportErr(msg, extra = {}) {
+  msg = String(msg || '').slice(0, 300);
+  if (!PUSH || errN >= 10 || !msg || msg === 'Script error.' || errSeen.has(msg)) return;
+  errSeen.add(msg); errN++;
+  let v = ''; try { v = view; } catch {}
+  fetch(PUSH + '/log', { method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ v: APP_V, msg, view: v, lang: O.lang, online: navigator.onLine, standalone: !!navigator.standalone, ua: navigator.userAgent.slice(0, 160), ...extra }) }).catch(() => {});
+}
+addEventListener('error', e => reportErr(e.message, { file: (e.filename || '').split('/').pop(), line: e.lineno, col: e.colno, stack: String(e.error?.stack || '').slice(0, 1200) }));
+addEventListener('unhandledrejection', e => reportErr('promise: ' + (e.reason?.message || e.reason), { stack: String(e.reason?.stack || '').slice(0, 1200) }));
 const st = { loc: store.get('loc', null), from: null, to: null, when: 'now', time: '', plan: [], cursor: null, cur: null, follow: false };
 
 /* ---------- limbi ---------- */
@@ -1146,6 +1159,7 @@ async function startLive(it) {
 }
 function stopLive() {
   if (!live) return;
+  setTimeout(showUpdate, 1000);
   recordTrip(); followStop(live.done);
   clearInterval(live.timer); clearInterval(live.rt);
   try { live.lock?.release(); } catch {}
@@ -1672,6 +1686,29 @@ function bkOptsBind() {
   $('#bkImp').onclick = bkImport;
   $('#bkRes')?.addEventListener('click', () => { const c = prompt(T('bkAsk')); if (c && normCode(c).length >= 20) bkRestore(c); else if (c) toast(T('bkBad')); });
 }
+
+/* ---------- versiune noua ---------- */
+Object.assign(L10N.ro, { updAvail: 'Versiune noua disponibila. Atinge pentru actualizare.' });
+Object.assign(L10N.en, { updAvail: 'New version available. Tap to update.' });
+let updPending = false;
+async function checkVersion() {
+  try {
+    const j = await (await fetch('version.json?t=' + Date.now(), { cache: 'no-store' })).json();
+    if (j.v && j.v !== APP_V) { updPending = true; showUpdate(); }
+  } catch {}
+}
+function showUpdate() {
+  const b = $('#upd'); if (!b || !updPending || live) return;
+  b.textContent = T('updAvail'); b.hidden = false;
+  b.onclick = async () => {
+    b.textContent = T('loading');
+    try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); for (const k of await caches.keys()) await caches.delete(k); } catch {}
+    location.reload();
+  };
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });
+setInterval(checkVersion, 30 * 60000);
+setTimeout(checkVersion, 5000);
 
 /* ---------- pornire ---------- */
 applyStatic();
