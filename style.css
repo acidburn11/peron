@@ -324,3 +324,5 @@ html.fs-l .livebar .bt b{font-size:22px}html.fs-xl .livebar .bt b{font-size:24px
 .cityrow>svg:first-child{color:var(--late);width:20px;height:20px}
 .cityrow span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .netl{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.netlbl{position:absolute;left:6px;top:-9px;white-space:nowrap;font:700 12px "Atkinson Hyperlegible",sans-serif;color:#14213D;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff;pointer-events:none}
+.netlbl.tram{font-weight:400;font-size:11px}

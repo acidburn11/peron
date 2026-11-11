@@ -11,7 +11,7 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.12.4';
+const APP_V = '2026.11.12.5';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -477,6 +477,7 @@ async function namePlace(lat, lon) {
 /* ---------- navigare intre panouri ---------- */
 const backStack = ['home'];
 function go(v, render) {
+  if (v !== 'net') map.removeLayer(netLbl);
   view = v; clearInterval(paneTimer); vehFocus = null;
   if (v !== 'reach') reachL.clearLayers();
   render(); pane.scrollTop = 0;
@@ -1881,7 +1882,7 @@ Object.assign(L10N.ro, {
   autoLink: 'Copiaza linkul pentru Scurtaturi', autoNote: 'Linkul e personal. Nu-l trimite nimanui.',
   netT: 'Harta retelei', netSub: c => `Linii de transport in ${c}`, netLoading: 'Descarc reteaua orasului...', netSaved: d => `salvata pe telefon ${d}, merge si fara internet`, netPng: 'Salveaza ca imagine', netRefresh: 'Actualizeaza', netDel: 'Sterge de pe telefon', netOfficial: 'Cauta harta oficiala',
   netOther: 'Alte orase descarcate', netNone: 'Nu am gasit linii de transport in zona.', netNeedCity: 'Pentru harta retelei e nevoie de locatia ta.', netDeleted: 'Harta a fost stearsa.', netLines: 'Linii',
-  M_rail: 'Tren'
+  M_rail: 'Tren', netPdf: 'Salveaza PDF (zoom nelimitat)'
 });
 Object.assign(L10N.en, {
   youAreIn: 'You are in', locating: 'Finding your city...', citiesT: 'My cities', citiesN: n => `${n} ${n === 1 ? 'city' : 'cities'}`, countriesN: n => `${n} ${n === 1 ? 'country' : 'countries'}`,
@@ -1891,7 +1892,7 @@ Object.assign(L10N.en, {
   autoLink: 'Copy link for Shortcuts', autoNote: 'The link is personal. Do not share it.',
   netT: 'Network map', netSub: c => `Transit lines in ${c}`, netLoading: 'Downloading the city network...', netSaved: d => `saved on the phone ${d}, works offline`, netPng: 'Save as image', netRefresh: 'Update', netDel: 'Delete from phone', netOfficial: 'Find the official map',
   netOther: 'Other downloaded cities', netNone: 'No transit lines found in this area.', netNeedCity: 'The network map needs your location.', netDeleted: 'Map deleted.', netLines: 'Lines',
-  M_rail: 'Train'
+  M_rail: 'Train', netPdf: 'Save PDF (unlimited zoom)'
 });
 I.netmap = sv('<circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/>');
 I.globe = sv('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>');
@@ -1985,9 +1986,10 @@ async function netFetch() {
       const cur = routes.get(key) || { m, n: tr.shortName || '', c: hex(tr.color) || MC[m], segs: [] };
       (r.segments || []).forEach(sg => { const gi = map2[sg.polyline]; if (gi != null && !cur.segs.includes(gi)) cur.segs.push(gi); });
       routes.set(key, cur);
-      if (m === 'metro' || m === 'train') (r.segments || []).forEach(sg => [sg.from, sg.to].forEach(i => {
+      if (m !== 'bus') (r.segments || []).forEach(sg => [sg.from, sg.to].forEach(i => {
         const p = resp.stops?.[i]; if (!p) return;
-        if (!keepStops.has(p.name)) keepStops.set(p.name, { n: p.name, lat: p.lat, lon: p.lon, m });
+        const pr = { metro: 3, train: 2, tram: 1 }, old = keepStops.get(p.name);
+        if (!old || pr[m] > pr[old.m]) keepStops.set(p.name, { n: p.name, lat: p.lat, lon: p.lon, m });
         (stopRoutes[p.name] = stopRoutes[p.name] || new Set()).add(key);
       }));
     });
@@ -1995,7 +1997,7 @@ async function netFetch() {
   await get(box, 0);
   const inBox = (a, b) => a >= box[0] && a <= box[2] && b >= box[1] && b <= box[3];
   const stops = [...keepStops.values()].filter(s => inBox(s.lat, s.lon)).map(s => ({ ...s, w: stopRoutes[s.n]?.size || 1 }));
-  return { v: 2, city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), box, polys, routes: [...routes.values()], stops };
+  return { v: 3, city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), box, polys, routes: [...routes.values()], stops };
 }
 function clipSeg(p, q, box) {
   let t0 = 0, t1 = 1;
@@ -2034,7 +2036,7 @@ async function renderNet(key) {
   try {
     if (!key) { await needLoc(); if (!st.city) await updateCity(true); if (!st.city) throw new Error(T('netNeedCity')); key = 'net:' + st.city.city + '|' + st.city.country; }
     let data = await idb.get(key).catch(() => null);
-    if (data && data.v !== 2 && st.loc && st.city && key === 'net:' + st.city.city + '|' + st.city.country) data = null;
+    if (data && data.v !== 3 && st.loc && st.city && key === 'net:' + st.city.city + '|' + st.city.country) data = null;
     if (!data) { data = await netFetch(); if (data.routes.length) await idb.set(key, data).catch(() => {}); }
     if (view !== 'net') return;
     netCur = { key, data, modes: st.netModes || null };
@@ -2049,23 +2051,29 @@ function drawNet() {
   if (!netCur.modes) netCur.modes = avail.filter(m => m !== 'bus').length ? avail.filter(m => m !== 'bus') : avail;
   const on = new Set(netCur.modes);
   routeL.clearLayers(); stopsL.clearLayers();
-  const W = { metro: 7, train: 5, tram: 4, bus: 2.5 };
-  netLines(data, on).forEach(l => L.polyline(l.p, { color: l.c, weight: W[l.m], opacity: l.m === 'bus' ? .65 : .95, interactive: false }).addTo(routeL));
+  const W = { metro: 7, train: 5, tram: 4, bus: 2 }, st3 = netStyle(on);
+  netLines(data, on).forEach(l => L.polyline(l.p, { color: st3.color(l), weight: W[l.m], opacity: st3.alpha(l), interactive: false }).addTo(routeL));
   const bx = netBox(data);
-  data.stops.filter(s => on.has(s.m) && s.lat >= bx[0] && s.lat <= bx[2] && s.lon >= bx[1] && s.lon <= bx[3]).forEach(s => L.circleMarker([s.lat, s.lon], { radius: 4, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL));
+  netLbl.clearLayers();
+  data.stops.filter(s => on.has(s.m) && s.lat >= bx[0] && s.lat <= bx[2] && s.lon >= bx[1] && s.lon <= bx[3]).forEach(s => {
+    L.circleMarker([s.lat, s.lon], { radius: s.m === 'tram' ? 3 : 4.5, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL);
+    L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<span class="netlbl ${s.m}">${esc(s.n)}</span>`, iconSize: [0, 0] }), interactive: false, zm: s.m === 'tram' ? 15 : 13 }).addTo(netLbl);
+  });
+  netLblZoom();
   if (routeL.getLayers().length) fitTo(routeL.getBounds());
   const lines = [...new Map(data.routes.filter(r => on.has(r.m) && r.n).map(r => [r.m + r.n, r])).values()].sort((a, b) => ['metro', 'train', 'tram', 'bus'].indexOf(a.m) - ['metro', 'train', 'tram', 'bus'].indexOf(b.m) || a.n.localeCompare(b.n, undefined, { numeric: true }));
   const when = new Date(data.at).toLocaleDateString(LOC(), { day: 'numeric', month: 'short' });
   const q = encodeURIComponent(`${data.city} ${O.lang === 'en' ? 'public transport map pdf' : 'harta transport public pdf'}`);
   $('#netBody').innerHTML = `<div class="muted" style="font-size:14px;margin:-6px 0 8px">${esc(T('netSub', data.city))}<br><small>${T('netSaved', when)}</small></div>
     <div class="chk">${avail.map(m => `<button data-nm="${m}" class="${on.has(m) ? 'on' : ''}">${I[m] || I.bus}${T('M_' + m)} <small class="muted">${counts[m]}</small></button>`).join('')}</div>
-    <div class="btns" style="flex-wrap:wrap"><button class="btn" id="netPng">${T('netPng')}</button><a class="btn ghost" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center">${T('netOfficial')}</a></div>
+    <div class="btns" style="flex-wrap:wrap"><button class="btn" id="netPdf">${T('netPdf')}</button><button class="btn ghost" id="netPng">${T('netPng')}</button><a class="btn ghost" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center">${T('netOfficial')}</a></div>
     <h3>${T('netLines')}</h3><div class="netl">${lines.slice(0, 300).map((r, i) => `<button data-nl="${esc(r.n)}">${badge({ mode: { metro: 'SUBWAY', train: 'RAIL', tram: 'TRAM', bus: 'BUS' }[r.m], routeShortName: r.n, routeColor: r.c.replace('#', '') })}</button>`).join('')}</div>
     <div class="btns"><button class="btn ghost" id="netRef">${T('netRefresh')}</button><button class="btn ghost" id="netDel">${T('netDel')}</button></div>
     <div id="netOther"></div>`;
   $('#netBody').querySelectorAll('[data-nm]').forEach(b => b.onclick = () => { const m = b.dataset.nm; netCur.modes = on.has(m) ? netCur.modes.filter(x => x !== m) : [...netCur.modes, m]; if (!netCur.modes.length) netCur.modes = [m]; st.netModes = netCur.modes; drawNet(); });
   $('#netBody').querySelectorAll('[data-nl]').forEach(b => b.onclick = async () => { try { const g = (await findLines(b.dataset.nl))[0]; if (g) openLine(g); } catch {} });
   $('#netPng').onclick = () => netPng(data, on);
+  $('#netPdf').onclick = () => netPdf(data, on);
   $('#netRef').onclick = async () => { $('#netBody').innerHTML = `<p class="muted">${T('netLoading')}</p>`; try { const d = await netFetch(); await idb.set(key, d); netCur.data = d; drawNet(); } catch (e) { toast(e.message); drawNet(); } };
   $('#netDel').onclick = async () => { await idb.del(key).catch(() => {}); toast(T('netDeleted')); back(); };
   idb.keys().then(ks => {
@@ -2075,45 +2083,99 @@ function drawNet() {
     el.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => { st.netModes = null; renderNet(b.dataset.ok); });
   }).catch(() => {});
 }
-async function netPng(data, on) {
-  const W = { metro: 10, train: 7, tram: 5, bus: 3 }, lines = netLines(data, on);
-  if (!lines.length) return;
+const netLbl = L.layerGroup();
+function netLblZoom() {
+  if (view !== 'net') { map.removeLayer(netLbl); return; }
+  const z = map.getZoom();
+  if (!map.hasLayer(netLbl)) netLbl.addTo(map);
+  netLbl.eachLayer(m => { const e = m.getElement(); if (e) e.style.display = z >= m.options.zm ? '' : 'none'; });
+}
+map.on('zoomend', netLblZoom);
+function netStyle(on) {
+  const ctx = on.has('bus') && [...on].some(m => m !== 'bus');
+  return { color: l => l.m === 'bus' && ctx ? '#9AA6B6' : l.c, alpha: l => l.m === 'bus' ? (ctx ? .55 : .8) : 1 };
+}
+const asciiName = t => t.replace(/[\u0141\u0142]/g, c => c === '\u0142' ? 'l' : 'L').replace(/\u00df/g, 'ss').replace(/[\u00d8\u00f8]/g, c => c === '\u00f8' ? 'o' : 'O').replace(/\u00e6/g, 'ae').replace(/\u0111/g, 'd').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '');
+function netLayout(data, on, S) {
+  const st3 = netStyle(on), raw = netLines(data, on);
+  if (!raw.length) return null;
   const my = la => Math.log(Math.tan(Math.PI / 4 + la * Math.PI / 360));
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  lines.forEach(l => l.p.forEach(([la, lo]) => { x0 = Math.min(x0, lo); x1 = Math.max(x1, lo); y0 = Math.min(y0, my(la)); y1 = Math.max(y1, my(la)); }));
-  const sx = (x1 - x0) * Math.PI / 180, sy = y1 - y0, S = 2800, pad = 120;
-  const w = sx >= sy ? S : Math.round(S * sx / sy), h = sx >= sy ? Math.round(S * sy / sx) : S;
-  const ox = Math.max(0, 1500 - w) / 2, cv = document.createElement('canvas'); cv.width = w + pad * 2 + ox * 2; cv.height = h + pad * 2 + 80;
-  const g = cv.getContext('2d'), X = lo => pad + ox + (lo - x0) / (x1 - x0 || 1) * w, Y = la => pad + (y1 - my(la)) / (sy || 1) * h;
-  g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, cv.width, cv.height); g.lineCap = 'round'; g.lineJoin = 'round';
-  ['bus', 'tram', 'train', 'metro'].forEach(m => lines.filter(l => l.m === m).forEach(l => { g.strokeStyle = l.c; g.globalAlpha = m === 'bus' ? .55 : 1; g.lineWidth = W[m]; g.beginPath(); l.p.forEach(([la, lo], i) => i ? g.lineTo(X(lo), Y(la)) : g.moveTo(X(lo), Y(la))); g.stroke(); }));
-  g.globalAlpha = 1;
-  const stops = data.stops.filter(s => on.has(s.m) && X(s.lon) >= pad + ox - 5 && X(s.lon) <= pad + ox + w + 5 && Y(s.lat) >= pad - 5 && Y(s.lat) <= pad + h + 5).sort((a, b) => (b.m === 'metro') - (a.m === 'metro') || b.w - a.w);
-  const boxes = stops.map(s => [X(s.lon) - 10, Y(s.lat) - 10, X(s.lon) + 10, Y(s.lat) + 10]);
-  const hit = (b, list) => list.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
-  stops.forEach(s => { g.fillStyle = '#fff'; g.strokeStyle = '#14213D'; g.lineWidth = s.w > 1 ? 5 : 4; g.beginPath(); g.arc(X(s.lon), Y(s.lat), s.w > 1 ? 11 : 8, 0, 7); g.fill(); g.stroke(); });
-  const placed = [];
-  stops.forEach(s => {
-    const fs = s.w > 1 ? 30 : 24;
-    g.font = `700 ${fs}px "Atkinson Hyperlegible", sans-serif`;
-    const tw = g.measureText(s.n).width, x = X(s.lon), y = Y(s.lat);
-    const cands = [[x + 16, y + fs * .35], [x - 16 - tw, y + fs * .35], [x - tw / 2, y - 18], [x - tw / 2, y + fs + 14]];
-    for (const [tx, ty] of cands) {
-      const b = [tx - 4, ty - fs, tx + tw + 4, ty + 6];
-      if (b[0] < 4 || b[2] > cv.width - 4 || b[1] < 4 || b[3] > cv.height - 90) continue;
-      if (hit(b, placed) || hit(b, boxes.filter(o => !(o[0] === x - 10 && o[1] === y - 10)))) continue;
-      placed.push(b);
-      g.lineWidth = 6; g.strokeStyle = '#fff'; g.strokeText(s.n, tx, ty); g.fillStyle = '#14213D'; g.fillText(s.n, tx, ty);
-      break;
+  raw.forEach(l => l.p.forEach(([la, lo]) => { x0 = Math.min(x0, lo); x1 = Math.max(x1, lo); y0 = Math.min(y0, my(la)); y1 = Math.max(y1, my(la)); }));
+  const sx = (x1 - x0) * Math.PI / 180, sy = y1 - y0, pad = S * .04;
+  const w = sx >= sy ? S : S * sx / sy, h = sx >= sy ? S * sy / sx : S, ox = Math.max(0, S * .55 - w) / 2;
+  const Wd = w + pad * 2 + ox * 2, Ht = h + pad * 2 + S * .05;
+  const X = lo => pad + ox + (lo - x0) / (x1 - x0 || 1) * w, Y = la => pad + (y1 - my(la)) / (sy || 1) * h;
+  const LW = { bus: S * .0009, tram: S * .0018, train: S * .0026, metro: S * .0034 }, order = ['bus', 'tram', 'train', 'metro'];
+  const lines = raw.sort((a, b) => order.indexOf(a.m) - order.indexOf(b.m)).map(l => {
+    const pts = []; let lx = -1e9, ly = -1e9;
+    l.p.forEach(([la, lo], i) => { const x = X(lo), y = Y(la); if (i === 0 || i === l.p.length - 1 || Math.hypot(x - lx, y - ly) > S * .0004) { pts.push([x, y]); lx = x; ly = y; } });
+    return { c: st3.color(l), a: st3.alpha(l), w: LW[l.m], pts };
+  });
+  const pr = { metro: 3, train: 2, tram: 1 };
+  const stops = data.stops.filter(s => on.has(s.m) && X(s.lon) >= pad + ox - 2 && X(s.lon) <= pad + ox + w + 2 && Y(s.lat) >= pad - 2 && Y(s.lat) <= pad + h + 2)
+    .sort((a, b) => pr[b.m] - pr[a.m] || (b.w || 1) - (a.w || 1));
+  const dots = stops.map(s => ({ x: X(s.lon), y: Y(s.lat), r: s.m === 'tram' ? S * .0017 : (s.w || 1) > 1 ? S * .0036 : S * .0028, lw: s.m === 'tram' ? S * .0007 : S * .0012 }));
+  const boxes = dots.map(d => [d.x - d.r, d.y - d.r, d.x + d.r, d.y + d.r]);
+  const hit = (b, list, skip) => list.some((o, i) => i !== skip && b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+  const placed = [], labels = [];
+  stops.forEach((s, i) => {
+    const size = s.m === 'tram' ? S * .0042 : (s.w || 1) > 1 ? S * .0078 : S * .0064, bold = s.m !== 'tram';
+    const text = s.n, tw = asciiName(text).length * size * (bold ? .58 : .53), d = dots[i], g = d.r + size * .35;
+    for (const [tx, ty] of [[d.x + g, d.y + size * .35], [d.x - g - tw, d.y + size * .35], [d.x - tw / 2, d.y - g], [d.x - tw / 2, d.y + g + size * .8]]) {
+      const b = [tx - size * .15, ty - size * .85, tx + tw + size * .15, ty + size * .25];
+      if (b[0] < 2 || b[2] > Wd - 2 || b[1] < 2 || b[3] > Ht - S * .05) continue;
+      if (hit(b, placed) || hit(b, boxes, i)) continue;
+      placed.push(b); labels.push({ x: tx, y: ty, size, bold, text }); break;
     }
   });
-  g.fillStyle = '#14213D'; g.font = '700 48px "Atkinson Hyperlegible", sans-serif'; g.fillText(`${data.city}${data.country ? ', ' + data.country : ''}`, pad, cv.height - 70);
-  g.font = '400 24px "Atkinson Hyperlegible", sans-serif'; g.fillStyle = '#5E6E85'; g.fillText(`Peron - ${new Date(data.at).toLocaleDateString(LOC())} - Transitous / OpenStreetMap`, pad, cv.height - 30);
-  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
-  const file = new File([blob], `peron-${(data.city || 'harta').replace(/[^\w-]+/g, '_')}.png`, { type: 'image/png' });
-  try { if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') return; }
-  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  return { W: Wd, H: Ht, pad, S, lines, dots, labels, title: `${data.city}${data.country ? ', ' + data.country : ''}`, foot: `Peron - ${new Date(data.at).toLocaleDateString(LOC())} - Transitous / OpenStreetMap` };
 }
+async function shareFile(blob, name, type) {
+  const file = new File([blob], name, { type });
+  try { if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+const netFileName = (data, ext) => `peron-${asciiName(data.city || 'harta').replace(/[^\w-]+/g, '_')}.${ext}`;
+async function netPng(data, on) {
+  const L2 = netLayout(data, on, 3800); if (!L2) return;
+  const k = Math.min(1, 4096 / Math.max(L2.W, L2.H));
+  const cv = document.createElement('canvas'); cv.width = Math.round(L2.W * k); cv.height = Math.round(L2.H * k);
+  const g = cv.getContext('2d'); g.scale(k, k);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, L2.W, L2.H); g.lineCap = 'round'; g.lineJoin = 'round';
+  L2.lines.forEach(l => { g.globalAlpha = l.a; g.strokeStyle = l.c; g.lineWidth = l.w; g.beginPath(); l.pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke(); });
+  g.globalAlpha = 1;
+  L2.dots.forEach(d => { g.fillStyle = '#fff'; g.strokeStyle = '#14213D'; g.lineWidth = d.lw; g.beginPath(); g.arc(d.x, d.y, d.r, 0, 7); g.fill(); g.stroke(); });
+  L2.labels.forEach(t => { g.font = `${t.bold ? 700 : 400} ${t.size}px "Atkinson Hyperlegible", sans-serif`; g.lineWidth = t.size * .22; g.strokeStyle = '#fff'; g.strokeText(t.text, t.x, t.y); g.fillStyle = '#14213D'; g.fillText(t.text, t.x, t.y); });
+  g.fillStyle = '#14213D'; g.font = `700 ${L2.S * .016}px "Atkinson Hyperlegible", sans-serif`; g.fillText(L2.title, L2.pad, L2.H - L2.S * .022);
+  g.fillStyle = '#5E6E85'; g.font = `400 ${L2.S * .008}px "Atkinson Hyperlegible", sans-serif`; g.fillText(L2.foot, L2.pad, L2.H - L2.S * .008);
+  await shareFile(await new Promise(r => cv.toBlob(r, 'image/png')), netFileName(data, 'png'), 'image/png');
+}
+async function netPdf(data, on) {
+  const L2 = netLayout(data, on, 2200); if (!L2) return;
+  const f = n => (Math.round(n * 100) / 100).toString(), H = L2.H, c3 = hx => { const h = (hx || '#000').replace('#', ''); return [0, 2, 4].map(i => f(parseInt(h.slice(i, i + 2), 16) / 255)).join(' '); };
+  const esc2 = t => asciiName(t).replace(/[\\()]/g, m => '\\' + m);
+  const o = ['1 J 1 j'];
+  L2.lines.forEach(l => { if (l.pts.length < 2) return; o.push(`q ${c3(l.a < 1 ? mix(l.c, l.a) : l.c)} RG ${f(l.w)} w ${l.pts.map(([x, y], i) => `${f(x)} ${f(H - y)} ${i ? 'l' : 'm'}`).join(' ')} S Q`); });
+  const K = .5523;
+  L2.dots.forEach(d => { const x = d.x, y = H - d.y, r = d.r, k = r * K; o.push(`q 1 1 1 rg 0.078 0.129 0.239 RG ${f(d.lw)} w ${f(x + r)} ${f(y)} m ${f(x + r)} ${f(y + k)} ${f(x + k)} ${f(y + r)} ${f(x)} ${f(y + r)} c ${f(x - k)} ${f(y + r)} ${f(x - r)} ${f(y + k)} ${f(x - r)} ${f(y)} c ${f(x - r)} ${f(y - k)} ${f(x - k)} ${f(y - r)} ${f(x)} ${f(y - r)} c ${f(x + k)} ${f(y - r)} ${f(x + r)} ${f(y - k)} ${f(x + r)} ${f(y)} c B Q`); });
+  L2.labels.forEach(t => {
+    const fn = t.bold ? '/F2' : '/F1', tx = `${f(t.x)} ${f(H - t.y)} Td (${esc2(t.text)}) Tj`;
+    o.push(`BT ${fn} ${f(t.size)} Tf 1 1 1 RG ${f(t.size * .22)} w 1 Tr 1 j ${tx} ET`, `BT ${fn} ${f(t.size)} Tf 0.078 0.129 0.239 rg 0 Tr ${tx} ET`);
+  });
+  o.push(`BT /F2 ${f(L2.S * .016)} Tf 0.078 0.129 0.239 rg ${f(L2.pad)} ${f(L2.S * .022)} Td (${esc2(L2.title)}) Tj ET`, `BT /F1 ${f(L2.S * .008)} Tf 0.37 0.43 0.52 rg ${f(L2.pad)} ${f(L2.S * .008)} Td (${esc2(L2.foot)}) Tj ET`);
+  const content = o.join('\n');
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${f(L2.W)} ${f(H)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
+  let pdf = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((b, i) => { offs.push(pdf.length); pdf += `${i + 1} 0 obj\n${b}\nendobj\n`; });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map(x => String(x).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  await shareFile(new Blob([pdf], { type: 'application/pdf' }), netFileName(data, 'pdf'), 'application/pdf');
+}
+function mix(hx, a) { const h = hx.replace('#', ''); return '#' + [0, 2, 4].map(i => Math.round(255 - (255 - parseInt(h.slice(i, i + 2), 16)) * a).toString(16).padStart(2, '0')).join(''); }
 
 /* ---------- versiune noua ---------- */
 Object.assign(L10N.ro, { updAvail: 'Versiune noua disponibila. Atinge pentru actualizare.' });
