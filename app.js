@@ -11,7 +11,7 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.12.2';
+const APP_V = '2026.11.12.3';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -1970,16 +1970,50 @@ function renderCities() {
 const NETM = { metro: 'metro', train: 'train', tram: 'tram', bus: 'bus' };
 const netMode = m => { const k = MK(m); return k === 'ferry' || k === 'cable' ? 'tram' : k; };
 async function netFetch() {
-  const [la, lo] = st.loc, d = .12;
-  const resp = await api('/experimental/map/routes', { zoom: 14, min: `${la - d},${lo - d * 1.6}`, max: `${la + d},${lo + d * 1.6}`, language: O.lang }, 600000);
-  const routes = [], keepStops = new Map();
-  (resp.routes || []).forEach(r => {
-    const m = netMode(r.mode), tr = (r.transitRoutes || [])[0] || {};
-    const segs = (r.segments || []).map(s => s.polyline);
-    routes.push({ m, n: tr.shortName || '', c: hex(tr.color) || MC[m], segs });
-    if (m === 'metro' || m === 'train') (r.segments || []).forEach(s => [s.from, s.to].forEach(i => { const p = resp.stops?.[i]; if (p && !keepStops.has(p.name)) keepStops.set(p.name, { n: p.name, lat: p.lat, lon: p.lon, m }); }));
+  const [la, lo] = st.loc, d = .11, box = [la - d, lo - d * 1.6, la + d, lo + d * 1.6];
+  const polys = [], pIdx = new Map(), routes = new Map(), keepStops = new Map(), stopRoutes = {};
+  const get = async (b, depth) => {
+    const resp = await api('/experimental/map/routes', { zoom: 16, min: `${b[0]},${b[1]}`, max: `${b[2]},${b[3]}`, language: O.lang }, 600000);
+    if (resp.zoomFiltered && depth < 2) {
+      const mla = (b[0] + b[2]) / 2, mlo = (b[1] + b[3]) / 2;
+      for (const q of [[b[0], b[1], mla, mlo], [b[0], mlo, mla, b[3]], [mla, b[1], b[2], mlo], [mla, mlo, b[2], b[3]]]) await get(q, depth + 1);
+      return;
+    }
+    const map2 = (resp.polylines || []).map(p => { const k = p.polyline.points; if (!pIdx.has(k)) { pIdx.set(k, polys.length); polys.push([k, p.polyline.precision]); } return pIdx.get(k); });
+    (resp.routes || []).forEach(r => {
+      const m = netMode(r.mode), tr = (r.transitRoutes || [])[0] || {}, key = r.routeIdx ?? (m + tr.shortName + JSON.stringify(r.segments?.[0]));
+      const cur = routes.get(key) || { m, n: tr.shortName || '', c: hex(tr.color) || MC[m], segs: [] };
+      (r.segments || []).forEach(sg => { const gi = map2[sg.polyline]; if (gi != null && !cur.segs.includes(gi)) cur.segs.push(gi); });
+      routes.set(key, cur);
+      if (m === 'metro' || m === 'train') (r.segments || []).forEach(sg => [sg.from, sg.to].forEach(i => {
+        const p = resp.stops?.[i]; if (!p) return;
+        if (!keepStops.has(p.name)) keepStops.set(p.name, { n: p.name, lat: p.lat, lon: p.lon, m });
+        (stopRoutes[p.name] = stopRoutes[p.name] || new Set()).add(key);
+      }));
+    });
+  };
+  await get(box, 0);
+  const inBox = (a, b) => a >= box[0] && a <= box[2] && b >= box[1] && b <= box[3];
+  const stops = [...keepStops.values()].filter(s => inBox(s.lat, s.lon)).map(s => ({ ...s, w: stopRoutes[s.n]?.size || 1 }));
+  return { v: 2, city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), box, polys, routes: [...routes.values()], stops };
+}
+function clipRuns(pts, box) {
+  const runs = []; let cur = [];
+  const inside = ([a, b]) => a >= box[0] && a <= box[2] && b >= box[1] && b <= box[3];
+  pts.forEach((p, i) => {
+    if (inside(p)) { if (!cur.length && i > 0) cur.push(pts[i - 1]); cur.push(p); }
+    else if (cur.length) { cur.push(p); runs.push(cur); cur = []; }
   });
-  return { city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), polys: (resp.polylines || []).map(p => [p.polyline.points, p.polyline.precision]), routes, stops: [...keepStops.values()] };
+  if (cur.length > 1) runs.push(cur);
+  return runs;
+}
+function netLines(data, on) {
+  const out = [], drawn = new Set();
+  ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => {
+    if (drawn.has(m + i) || !data.polys[i]) return; drawn.add(m + i);
+    clipRuns(decode(data.polys[i][0], data.polys[i][1]), data.box).forEach(p => out.push({ m, c: r.c, p }));
+  })));
+  return out;
 }
 let netCur = null;
 async function renderNet(key) {
@@ -1987,6 +2021,7 @@ async function renderNet(key) {
   try {
     if (!key) { await needLoc(); if (!st.city) await updateCity(true); if (!st.city) throw new Error(T('netNeedCity')); key = 'net:' + st.city.city + '|' + st.city.country; }
     let data = await idb.get(key).catch(() => null);
+    if (data && data.v !== 2) { if (st.loc && st.city && key === 'net:' + st.city.city + '|' + st.city.country) data = null; else data = { ...data, v: 2, box: [-90, -180, 90, 180] }; }
     if (!data) { data = await netFetch(); if (data.routes.length) await idb.set(key, data).catch(() => {}); }
     if (view !== 'net') return;
     netCur = { key, data, modes: st.netModes || null };
@@ -2001,11 +2036,8 @@ function drawNet() {
   if (!netCur.modes) netCur.modes = avail.filter(m => m !== 'bus').length ? avail.filter(m => m !== 'bus') : avail;
   const on = new Set(netCur.modes);
   routeL.clearLayers(); stopsL.clearLayers();
-  const W = { metro: 7, train: 5, tram: 4, bus: 2.5 }, drawn = new Set();
-  ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => {
-    const k = m + i; if (drawn.has(k) || !data.polys[i]) return; drawn.add(k);
-    L.polyline(decode(data.polys[i][0], data.polys[i][1]), { color: r.c, weight: W[m], opacity: m === 'bus' ? .65 : .95, interactive: false }).addTo(routeL);
-  })));
+  const W = { metro: 7, train: 5, tram: 4, bus: 2.5 };
+  netLines(data, on).forEach(l => L.polyline(l.p, { color: l.c, weight: W[l.m], opacity: l.m === 'bus' ? .65 : .95, interactive: false }).addTo(routeL));
   data.stops.filter(s => on.has(s.m)).forEach(s => L.circleMarker([s.lat, s.lon], { radius: 4, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL));
   if (routeL.getLayers().length) fitTo(routeL.getBounds());
   const lines = [...new Map(data.routes.filter(r => on.has(r.m) && r.n).map(r => [r.m + r.n, r])).values()].sort((a, b) => ['metro', 'train', 'tram', 'bus'].indexOf(a.m) - ['metro', 'train', 'tram', 'bus'].indexOf(b.m) || a.n.localeCompare(b.n, undefined, { numeric: true }));
@@ -2030,25 +2062,39 @@ function drawNet() {
   }).catch(() => {});
 }
 async function netPng(data, on) {
-  const lines = [], W = { metro: 10, train: 7, tram: 5, bus: 3 };
-  ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => { const seen = new Set(); data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => { if (seen.has(i) || !data.polys[i]) return; seen.add(i); lines.push({ m, c: r.c, p: decode(data.polys[i][0], data.polys[i][1]) }); })); });
+  const W = { metro: 10, train: 7, tram: 5, bus: 3 }, lines = netLines(data, on);
   if (!lines.length) return;
   const my = la => Math.log(Math.tan(Math.PI / 4 + la * Math.PI / 360));
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   lines.forEach(l => l.p.forEach(([la, lo]) => { x0 = Math.min(x0, lo); x1 = Math.max(x1, lo); y0 = Math.min(y0, my(la)); y1 = Math.max(y1, my(la)); }));
-  const sx = (x1 - x0) * Math.PI / 180, sy = y1 - y0, S = 2600, pad = 90;
+  const sx = (x1 - x0) * Math.PI / 180, sy = y1 - y0, S = 2800, pad = 120;
   const w = sx >= sy ? S : Math.round(S * sx / sy), h = sx >= sy ? Math.round(S * sy / sx) : S;
-  const cv = document.createElement('canvas'); cv.width = w + pad * 2; cv.height = h + pad * 2 + 70;
-  const g = cv.getContext('2d'), X = lo => pad + (lo - x0) / (x1 - x0 || 1) * w, Y = la => pad + (y1 - my(la)) / (sy || 1) * h;
+  const ox = Math.max(0, 1500 - w) / 2, cv = document.createElement('canvas'); cv.width = w + pad * 2 + ox * 2; cv.height = h + pad * 2 + 80;
+  const g = cv.getContext('2d'), X = lo => pad + ox + (lo - x0) / (x1 - x0 || 1) * w, Y = la => pad + (y1 - my(la)) / (sy || 1) * h;
   g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, cv.width, cv.height); g.lineCap = 'round'; g.lineJoin = 'round';
-  lines.forEach(l => { g.strokeStyle = l.c; g.globalAlpha = l.m === 'bus' ? .6 : 1; g.lineWidth = W[l.m]; g.beginPath(); l.p.forEach(([la, lo], i) => i ? g.lineTo(X(lo), Y(la)) : g.moveTo(X(lo), Y(la))); g.stroke(); });
+  ['bus', 'tram', 'train', 'metro'].forEach(m => lines.filter(l => l.m === m).forEach(l => { g.strokeStyle = l.c; g.globalAlpha = m === 'bus' ? .55 : 1; g.lineWidth = W[m]; g.beginPath(); l.p.forEach(([la, lo], i) => i ? g.lineTo(X(lo), Y(la)) : g.moveTo(X(lo), Y(la))); g.stroke(); }));
   g.globalAlpha = 1;
-  const st2 = data.stops.filter(s => on.has(s.m));
-  g.font = '600 22px "Atkinson Hyperlegible", sans-serif';
-  st2.forEach(s => { g.fillStyle = '#fff'; g.strokeStyle = '#14213D'; g.lineWidth = 4; g.beginPath(); g.arc(X(s.lon), Y(s.lat), 8, 0, 7); g.fill(); g.stroke(); });
-  if (st2.length <= 250) st2.forEach(s => { g.lineWidth = 5; g.strokeStyle = '#fff'; g.strokeText(s.n, X(s.lon) + 12, Y(s.lat) - 10); g.fillStyle = '#14213D'; g.fillText(s.n, X(s.lon) + 12, Y(s.lat) - 10); });
-  g.fillStyle = '#14213D'; g.font = '700 44px "Atkinson Hyperlegible", sans-serif'; g.fillText(`${data.city}${data.country ? ', ' + data.country : ''}`, pad, cv.height - 70);
-  g.font = '400 22px "Atkinson Hyperlegible", sans-serif'; g.fillStyle = '#5E6E85'; g.fillText(`Peron - ${new Date(data.at).toLocaleDateString(LOC())} - Transitous / OpenStreetMap`, pad, cv.height - 32);
+  const stops = data.stops.filter(s => on.has(s.m) && X(s.lon) >= pad + ox - 5 && X(s.lon) <= pad + ox + w + 5 && Y(s.lat) >= pad - 5 && Y(s.lat) <= pad + h + 5).sort((a, b) => (b.m === 'metro') - (a.m === 'metro') || b.w - a.w);
+  const boxes = stops.map(s => [X(s.lon) - 10, Y(s.lat) - 10, X(s.lon) + 10, Y(s.lat) + 10]);
+  const hit = (b, list) => list.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+  stops.forEach(s => { g.fillStyle = '#fff'; g.strokeStyle = '#14213D'; g.lineWidth = s.w > 1 ? 5 : 4; g.beginPath(); g.arc(X(s.lon), Y(s.lat), s.w > 1 ? 11 : 8, 0, 7); g.fill(); g.stroke(); });
+  const placed = [];
+  stops.forEach(s => {
+    const fs = s.w > 1 ? 30 : 24;
+    g.font = `700 ${fs}px "Atkinson Hyperlegible", sans-serif`;
+    const tw = g.measureText(s.n).width, x = X(s.lon), y = Y(s.lat);
+    const cands = [[x + 16, y + fs * .35], [x - 16 - tw, y + fs * .35], [x - tw / 2, y - 18], [x - tw / 2, y + fs + 14]];
+    for (const [tx, ty] of cands) {
+      const b = [tx - 4, ty - fs, tx + tw + 4, ty + 6];
+      if (b[0] < 4 || b[2] > cv.width - 4 || b[1] < 4 || b[3] > cv.height - 90) continue;
+      if (hit(b, placed) || hit(b, boxes.filter(o => !(o[0] === x - 10 && o[1] === y - 10)))) continue;
+      placed.push(b);
+      g.lineWidth = 6; g.strokeStyle = '#fff'; g.strokeText(s.n, tx, ty); g.fillStyle = '#14213D'; g.fillText(s.n, tx, ty);
+      break;
+    }
+  });
+  g.fillStyle = '#14213D'; g.font = '700 48px "Atkinson Hyperlegible", sans-serif'; g.fillText(`${data.city}${data.country ? ', ' + data.country : ''}`, pad, cv.height - 70);
+  g.font = '400 24px "Atkinson Hyperlegible", sans-serif'; g.fillStyle = '#5E6E85'; g.fillText(`Peron - ${new Date(data.at).toLocaleDateString(LOC())} - Transitous / OpenStreetMap`, pad, cv.height - 30);
   const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
   const file = new File([blob], `peron-${(data.city || 'harta').replace(/[^\w-]+/g, '_')}.png`, { type: 'image/png' });
   try { if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') return; }
