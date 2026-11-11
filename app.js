@@ -11,7 +11,7 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.12.3';
+const APP_V = '2026.11.12.4';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -1997,21 +1997,34 @@ async function netFetch() {
   const stops = [...keepStops.values()].filter(s => inBox(s.lat, s.lon)).map(s => ({ ...s, w: stopRoutes[s.n]?.size || 1 }));
   return { v: 2, city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), box, polys, routes: [...routes.values()], stops };
 }
+function clipSeg(p, q, box) {
+  let t0 = 0, t1 = 1;
+  const dx = q[0] - p[0], dy = q[1] - p[1];
+  for (const [pp, qq] of [[-dx, p[0] - box[0]], [dx, box[2] - p[0]], [-dy, p[1] - box[1]], [dy, box[3] - p[1]]]) {
+    if (pp === 0) { if (qq < 0) return null; continue; }
+    const r = qq / pp;
+    if (pp < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; }
+  }
+  return [[p[0] + t0 * dx, p[1] + t0 * dy], [p[0] + t1 * dx, p[1] + t1 * dy], t0 > 0, t1 < 1];
+}
 function clipRuns(pts, box) {
   const runs = []; let cur = [];
-  const inside = ([a, b]) => a >= box[0] && a <= box[2] && b >= box[1] && b <= box[3];
-  pts.forEach((p, i) => {
-    if (inside(p)) { if (!cur.length && i > 0) cur.push(pts[i - 1]); cur.push(p); }
-    else if (cur.length) { cur.push(p); runs.push(cur); cur = []; }
-  });
+  for (let i = 1; i < pts.length; i++) {
+    const c = clipSeg(pts[i - 1], pts[i], box);
+    if (!c) { if (cur.length > 1) runs.push(cur); cur = []; continue; }
+    if (!cur.length || c[2]) { if (cur.length > 1) runs.push(cur); cur = [c[0]]; }
+    cur.push(c[1]);
+    if (c[3]) { runs.push(cur); cur = []; }
+  }
   if (cur.length > 1) runs.push(cur);
   return runs;
 }
+const netBox = data => data.box && data.box[0] > -90 ? data.box : data.center ? [data.center[0] - .11, data.center[1] - .176, data.center[0] + .11, data.center[1] + .176] : [-90, -180, 90, 180];
 function netLines(data, on) {
   const out = [], drawn = new Set();
   ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => {
     if (drawn.has(m + i) || !data.polys[i]) return; drawn.add(m + i);
-    clipRuns(decode(data.polys[i][0], data.polys[i][1]), data.box).forEach(p => out.push({ m, c: r.c, p }));
+    clipRuns(decode(data.polys[i][0], data.polys[i][1]), netBox(data)).forEach(p => out.push({ m, c: r.c, p }));
   })));
   return out;
 }
@@ -2021,7 +2034,7 @@ async function renderNet(key) {
   try {
     if (!key) { await needLoc(); if (!st.city) await updateCity(true); if (!st.city) throw new Error(T('netNeedCity')); key = 'net:' + st.city.city + '|' + st.city.country; }
     let data = await idb.get(key).catch(() => null);
-    if (data && data.v !== 2) { if (st.loc && st.city && key === 'net:' + st.city.city + '|' + st.city.country) data = null; else data = { ...data, v: 2, box: [-90, -180, 90, 180] }; }
+    if (data && data.v !== 2 && st.loc && st.city && key === 'net:' + st.city.city + '|' + st.city.country) data = null;
     if (!data) { data = await netFetch(); if (data.routes.length) await idb.set(key, data).catch(() => {}); }
     if (view !== 'net') return;
     netCur = { key, data, modes: st.netModes || null };
@@ -2038,7 +2051,8 @@ function drawNet() {
   routeL.clearLayers(); stopsL.clearLayers();
   const W = { metro: 7, train: 5, tram: 4, bus: 2.5 };
   netLines(data, on).forEach(l => L.polyline(l.p, { color: l.c, weight: W[l.m], opacity: l.m === 'bus' ? .65 : .95, interactive: false }).addTo(routeL));
-  data.stops.filter(s => on.has(s.m)).forEach(s => L.circleMarker([s.lat, s.lon], { radius: 4, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL));
+  const bx = netBox(data);
+  data.stops.filter(s => on.has(s.m) && s.lat >= bx[0] && s.lat <= bx[2] && s.lon >= bx[1] && s.lon <= bx[3]).forEach(s => L.circleMarker([s.lat, s.lon], { radius: 4, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL));
   if (routeL.getLayers().length) fitTo(routeL.getBounds());
   const lines = [...new Map(data.routes.filter(r => on.has(r.m) && r.n).map(r => [r.m + r.n, r])).values()].sort((a, b) => ['metro', 'train', 'tram', 'bus'].indexOf(a.m) - ['metro', 'train', 'tram', 'bus'].indexOf(b.m) || a.n.localeCompare(b.n, undefined, { numeric: true }));
   const when = new Date(data.at).toLocaleDateString(LOC(), { day: 'numeric', month: 'short' });
