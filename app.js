@@ -7,11 +7,11 @@ const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
-const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 'ro' : 'en', modes: { BUS: true, TRAM: true, SUBWAY: true, RAIL: true, FERRY: true }, transfers: 'any', walk: 15, speed: 'normal', wheelchair: false, alertStops: 2, sound: true, home: null, work: null, vehicles: true, rentals: false, useRental: false, lastAlert: false };
+const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 'ro' : 'en', modes: { BUS: true, TRAM: true, SUBWAY: true, RAIL: true, FERRY: true }, transfers: 'any', walk: 15, speed: 'normal', wheelchair: false, alertStops: 2, sound: true, home: null, work: null, vehicles: true, rentals: false, useRental: false, lastAlert: false, theme: 'auto', fs: 'n', hc: false };
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.11.1';
+const APP_V = '2026.11.12.1';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -490,7 +490,7 @@ function back() {
   if (prev === 'route' && st.cur) return go('route', () => renderRoute(st.cur));
   if (prev === 'stop' && st.stop) return go('stop', () => renderStop(st.stop));
   if (prev === 'line' && st.line) return go('line', () => renderLine(st.line, st.lineDir));
-  const gen = { weather: renderWeather, deps: renderDeps, hist: renderHist, reach: renderReach };
+  const gen = { weather: renderWeather, deps: renderDeps, hist: renderHist, reach: renderReach, near: () => renderLineNear(st.line) };
   if (gen[prev]) return go(prev, gen[prev]);
   if (prev && prev !== 'home') return back();
   backStack.length = 0; backStack.push('home'); routeL.clearLayers(); go('home', renderHome); setSheet('half');
@@ -509,6 +509,7 @@ function renderHome() {
   pane.innerHTML = `<div class="quick">${placeBtn('home')}${placeBtn('work')}</div>
     <div id="lastHome"></div>
     <div class="tools"><button id="reachB">${I.reach}<span>${T('reach')}</span></button><button id="depsB">${I.dep}<span>${T('depsT')}</span></button><button id="histB">${I.hist}<span>${T('histT')}</span></button></div>
+    ${myLines().length ? `<h3>${T('myLines')}</h3><div id="myLines"><div class="skel" style="height:70px"></div></div>` : ''}
     ${fst.length ? `<h3>${T('myStops')}</h3><div id="favStops"></div>` : ''}
     <h3>${T('nearStops')}</h3><div id="near">${st.loc ? '<div class="skel" style="height:60px"></div>' : `<button class="row" id="askLoc"><span class="ic">${I.me}</span><span class="tx"><div>${T('showNear')}</div><small>${T('needLoc')}</small></span></button>`}</div>
     ${favs.length ? `<h3>${T('savedRoutes')}</h3>` + favs.map(x => routeRow(x, 'favs', I.star)).join('') : ''}
@@ -531,9 +532,10 @@ function renderHome() {
   });
   if (st.loc) nearStops();
   if (fst.length) loadFavStops();
+  if (myLines().length) loadMyLines();
   lastHome();
   clearInterval(paneTimer);
-  paneTimer = setInterval(() => { if (view === 'home') { if (fst.length) loadFavStops(); lastHome(); } }, 30000);
+  paneTimer = setInterval(() => { if (view === 'home') { if (fst.length) loadFavStops(); if (myLines().length) loadMyLines(); lastHome(); } }, 30000);
 }
 async function nearStops() {
   const [la, lo] = st.loc, d = .005;
@@ -700,6 +702,7 @@ function renderOpts() {
   const pushState = !PUSH ? T('pushOff') : ('Notification' in window && Notification.permission === 'denied') ? T('pushDenied') : '';
   $('#opts').innerHTML = `<div class="ohd"><button class="icb" id="closeOpts" aria-label="${T('close')}">${I.back}</button><h2>${T('options')}</h2></div><div class="obody">
     ${opt(T('langO'), '', seg('lang', [['ro', 'Romana'], ['en', 'English']]))}
+    ${lookOptsHtml(opt, seg, tg)}
     <h3>${T('modesH')}</h3>
     <div class="chk">${MODES.map(([k, ic]) => `<button data-m="${k}" class="${O.modes[k] ? 'on' : ''}">${I[ic]}${T('M_' + ic)}</button>`).join('')}</div>
     <h3>${T('prefsH')}</h3>
@@ -732,10 +735,11 @@ function renderOpts() {
   $('#opts').querySelectorAll('.seg[data-o] button').forEach(b => b.onclick = () => {
     const k = b.parentElement.dataset.o, v = b.dataset.v; O[k] = typeof DEF[k] === 'number' ? +v : v; saveOpts();
     if (k === 'lang') { cache.clear(); applyStatic(); refreshView(); }
+    if (k === 'theme' || k === 'fs') applyLook();
     renderOpts();
   });
   $('#opts').querySelectorAll('[data-t]').forEach(b => b.onclick = async () => {
-    const k = b.dataset.t; O[k] = !O[k]; saveOpts(); renderOpts();
+    const k = b.dataset.t; O[k] = !O[k]; saveOpts(); renderOpts(); applyLook();
     vehKey = rentKey = ''; loadVehicles(); loadRentals();
     if (k === 'lastAlert') { if (O.lastAlert) { try { await pushSubscribe(); schedLastPush(); } catch (e) { toast(e.message); } } else pushCancel('last'); }
   });
@@ -758,7 +762,7 @@ function applyStatic() {
 function refreshView() {
   if (live) return liveTick();
   renderWxChip();
-  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach, weather: renderWeather, deps: renderDeps, hist: renderHist })[view]?.();
+  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach, weather: renderWeather, deps: renderDeps, hist: renderHist, near: () => renderLineNear(st.line) })[view]?.();
 }
 
 /* ---------- planificare ---------- */
@@ -896,6 +900,7 @@ function renderRoute(it) {
     + `<div class="legs" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:-4px 0 12px">${legsStrip(it.legs)}</div>`
     + (price ? `<div class="muted" style="font-size:14px;margin:-6px 0 10px">${T('fareEst')}: <b style="color:var(--ink)">${price}</b></div>` : '')
     + alertsOf(it.legs).map(alertBox).join('')
+    + ticketsHtml(it)
     + `<div style="display:flex;gap:8px"><button class="go" id="startLive" style="flex:1">${I.play}${T('startLive')}</button><button class="go ghost" id="shareB" aria-label="${T('shareEta')}" style="width:58px">${I.share}</button></div><ul class="tl">${tl}</ul>`;
   $('#favB')?.addEventListener('click', () => {
     let f = store.get('favs', []);
@@ -1039,8 +1044,10 @@ function openLine(g) { st.line = g; st.lineDir = 0; nav('line', () => renderLine
 async function renderLine(g, di) {
   st.lineDir = di;
   pane.innerHTML = hd(`${badge(g)} ${esc(modeName(g.mode))}`, PUSH ? `<button class="icb bell" id="wline" aria-label="${T('watchB')}">${I.bell}</button>` : '') + (g.longName ? `<div class="muted" style="font-size:14px;margin:-6px 0 8px">${esc(g.longName)}</div>` : '')
+    + `<button class="btn" id="nearB" style="width:100%;margin:2px 0 6px">${I.me.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px"')} ${T('nearMe')}</button>`
     + `<h3>${T('directions')}</h3><div class="ttl">${g.dirs.map((d, i) => `<button data-d="${i}" class="${i === di ? 'on' : ''}"><small>${T('towards')}</small> ${esc(d.last)}</button>`).join('')}</div><div id="lineBody"><div class="skel"></div></div>`;
   pane.querySelectorAll('[data-d]').forEach(b => b.onclick = () => renderLine(g, +b.dataset.d));
+  $('#nearB').onclick = () => nav('near', () => renderLineNear(g));
   vehFocus = sg => sg.name === g.routeShortName;
   vehKey = ''; loadVehicles(true);
   const d = g.dirs[di]; if (!d) return;
@@ -1186,6 +1193,7 @@ function alertUser(key, text) {
   if (!live.pushOn) try { if (Notification.permission === 'granted') navigator.serviceWorker.ready.then(r => r.showNotification('Peron', { body: text, tag: 'peron-live', renotify: true, icon: 'icon-192.png' })); } catch {}
 }
 function setLeg(i) {
+  if (i > live.i) recordPunct(live.it.legs[live.i]);
   live.i = Math.max(0, Math.min(live.it.legs.length - 1, i)); live.idx = 0; live.done = false;
   drawRoute(live.it, live.i); liveTick();
 }
@@ -1209,7 +1217,7 @@ function liveTick() {
   let body = '';
   if (live.done) {
     bar('#16884F', '#fff', I.flag, T('arrived'), esc(st.to?.name || l.to.name));
-    if (!live.endDone) { live.endDone = true; recordTrip(); followStop(true); }
+    if (!live.endDone) { live.endDone = true; recordPunct(live.it.legs.at(-1)); recordTrip(); followStop(true); }
     body = `<p>${T('arrivedDest')}</p>`;
   } else if (isStreet(l)) {
     const d = pos ? dist(pos, ll(l.to)) : null, nx = legs[live.i + 1], w = walkInfo(l, pos);
@@ -1261,7 +1269,7 @@ function liveTick() {
     }
   }
   const nextLegs = legs.slice(live.i + 1).filter(x => !isStreet(x)), lal = alertsOf([l]);
-  pane.innerHTML = (live.banner ? `<div class="alert">${I.bell}<span>${esc(live.banner)}</span></div>` : '') + lal.map((a, i) => alertBox(a, 'l' + i)).join('') + body
+  pane.innerHTML = (live.banner ? `<div class="alert">${I.bell}<span>${esc(live.banner)}</span></div>` : '') + altHtml() + lal.map((a, i) => alertBox(a, 'l' + i)).join('') + body
     + (nextLegs.length && !live.done ? `<h3>${T('next')}</h3>${nextLegs.map(x => `<div class="row"><span class="ic">${I[MK(x.mode)]}</span><span class="tx"><div>${badge(x)} ${esc(x.from.name)}</div><small>${fmt(x.startTime, x.from.tz)} ${liveTag(x)}</small></span></div>`).join('')}` : '')
     + `<div class="lnav"><button class="btn ghost" id="lPrev" ${live.i === 0 ? 'disabled' : ''}>${T('prevLeg')}</button><button class="btn ghost" id="lNext">${live.i < legs.length - 1 ? T('nextLeg') : T('iArrived')}</button></div>
        ${PUSH ? `<div class="lnav"><button class="btn ${live.share ? '' : 'ghost'}" id="lFollow">${I.follow.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px"')} ${T('follow')}</button></div>` : ''}
@@ -1270,6 +1278,7 @@ function liveTick() {
   $('#lPrev').onclick = () => setLeg(live.i - 1);
   $('#lNext').onclick = () => live.i < legs.length - 1 ? setLeg(live.i + 1) : (live.done = true, liveTick());
   $('#lStop').onclick = stopLive;
+  altBind(); checkAlt();
   $('#lShare').onclick = () => shareEta(live.it);
   $('#lFollow')?.addEventListener('click', followStart);
   if (!live.done) followUpdate();
@@ -1469,7 +1478,7 @@ setInterval(() => loadWeather(), 10 * 60000);
 /* ---------- plecari programate ---------- */
 const depsList = () => store.get('deps', []);
 const daysTxt = d => d.date ? new Date(d.date + 'T12:00').toLocaleDateString(LOC(), { day: 'numeric', month: 'short' }) : d.days.length === 7 ? T('everyDay') : d.days.join() === '1,2,3,4,5' ? T('weekdays') : d.days.map(x => T('wd')[x]).join(' ');
-async function syncDeps() { if (!PUSH) throw new Error(T('pushOff')); await pushPost('/depart', { list: depsList() }); }
+async function syncDeps() { if (!PUSH) throw new Error(T('pushOff')); await pushPost('/depart', { list: depsList().map(d => ({ ...d, buffer: bufferFor(d) })) }); }
 function renderDeps() {
   const list = depsList();
   pane.innerHTML = hd(T('depsT'), `<button class="icb" id="addDep" aria-label="${T('addDep')}">${I.plus}</button>`) + `<p class="muted" style="font-size:14px;margin-top:-4px">${T('depsInfo')}</p>`
@@ -1580,6 +1589,7 @@ function renderHist() {
       : `<p class="muted">${T('histEmpty')}</p>`);
   pane.querySelectorAll('#hPer button').forEach(b => b.onclick = () => { st.histPer = b.dataset.v; renderHist(); });
   pane.querySelectorAll('[data-dt]').forEach(b => b.onclick = () => { store.set('trips', store.get('trips', []).filter(t => String(t.at) !== b.dataset.dt)); renderHist(); });
+  pane.insertAdjacentHTML('beforeend', punctHtml());
 }
 
 /* ---------- linkuri Siri si deschidere directa ---------- */
@@ -1687,6 +1697,178 @@ function bkOptsBind() {
   $('#bkRes')?.addEventListener('click', () => { const c = prompt(T('bkAsk')); if (c && normCode(c).length >= 20) bkRestore(c); else if (c) toast(T('bkBad')); });
 }
 
+/* ---------- v9: afisare, punctualitate, alternative, bilete, liniile mele ---------- */
+Object.assign(L10N.ro, {
+  lookH: 'Afisare', themeO: 'Tema', thAuto: 'Auto', thLight: 'Luminoasa', thDark: 'Intunecata', fsO: 'Marime text', fsN: 'Normal', fsL: 'Mare', fsXL: 'Foarte mare', hcO: 'Contrast ridicat',
+  punctH: 'Punctualitate pe liniile tale', punctEmpty: 'Apare dupa cateva calatorii live cu date in timp real.', avgDelay: d => d > 0 ? `in medie +${d} min` : d < 0 ? `in medie ${d} min` : 'in medie la timp', onTimePct: p => `${p}% la timp`,
+  per_m: 'dimineata', per_d: 'ziua', per_e: 'seara', per_n: 'noaptea', worstAt: (p, d) => `${p} +${d} min`, samples: n => `${n} ${n === 1 ? 'calatorie' : 'calatorii'}`, bufferTxt: m => `+${m} min rezerva, din istoric`,
+  altH: 'Alternativa mai rapida', altTxt: (l, d) => `${l} are +${d} min intarziere.`, altCancel: l => `${l} a fost anulat.`, altArr: (t, g) => `Ajungi la ${t}, cu ${g} min mai devreme.`, altUse: 'Schimba traseul', altIgnore: 'Raman pe traseu', altSwitched: 'Traseul a fost schimbat.',
+  tickets: 'Bilete si informatii', ticketsSub: 'site-ul operatorului',
+  nearMe: 'Cand vine langa mine', nearTitle: n => `Linia ${n} langa tine`, toward: s => `spre ${s}`, atStop: (s, d, m) => `${s}, ${d} (~${m} min pe jos)`, catchable: 'il prinzi', catchNext: m => `nu-l prinzi pe primul, il prinzi pe cel de peste ${m}`, tooLate: 'nu mai ajungi la niciunul', noDepLine: 'Nicio plecare curand din statia cea mai apropiata.',
+  myLines: 'Liniile mele', addMyLine: 'Adauga la liniile mele', lineAdded: 'Linie adaugata pe ecranul principal.', lineRemoved: 'Linie scoasa de pe ecranul principal.', needLocLine: 'Pentru asta e nevoie de locatia ta.'
+});
+Object.assign(L10N.en, {
+  lookH: 'Display', themeO: 'Theme', thAuto: 'Auto', thLight: 'Light', thDark: 'Dark', fsO: 'Text size', fsN: 'Normal', fsL: 'Large', fsXL: 'Extra large', hcO: 'High contrast',
+  punctH: 'Punctuality on your lines', punctEmpty: 'Shows up after a few live trips with real-time data.', avgDelay: d => d > 0 ? `on average +${d} min` : d < 0 ? `on average ${d} min` : 'on average on time', onTimePct: p => `${p}% on time`,
+  per_m: 'mornings', per_d: 'daytime', per_e: 'evenings', per_n: 'nights', worstAt: (p, d) => `${p} +${d} min`, samples: n => `${n} ${n === 1 ? 'trip' : 'trips'}`, bufferTxt: m => `+${m} min buffer, from history`,
+  altH: 'Faster alternative', altTxt: (l, d) => `${l} is ${d} min late.`, altCancel: l => `${l} was cancelled.`, altArr: (t, g) => `Arrive at ${t}, ${g} min earlier.`, altUse: 'Switch trip', altIgnore: 'Keep my trip', altSwitched: 'Trip switched.',
+  tickets: 'Tickets and info', ticketsSub: 'operator website',
+  nearMe: 'When does it come near me', nearTitle: n => `Line ${n} near you`, toward: s => `to ${s}`, atStop: (s, d, m) => `${s}, ${d} (~${m} min walk)`, catchable: 'you can make it', catchNext: m => `you will miss the first one, you can make the one in ${m}`, tooLate: 'you cannot make any of them', noDepLine: 'No departures soon from the nearest stop.',
+  myLines: 'My lines', addMyLine: 'Add to my lines', lineAdded: 'Line added to the home screen.', lineRemoved: 'Line removed from the home screen.', needLocLine: 'This needs your location.'
+});
+I.ticket = sv('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v12" stroke-dasharray="2 2"/>');
+I.zap = sv('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>');
+BK_KEYS.push('punct', 'mylines');
+
+function applyLook() {
+  const r = document.documentElement;
+  if (O.theme === 'auto') r.removeAttribute('data-theme'); else r.dataset.theme = O.theme;
+  r.classList.toggle('hc', !!O.hc);
+  r.classList.toggle('fs-l', O.fs === 'l'); r.classList.toggle('fs-xl', O.fs === 'xl');
+}
+function lookOptsHtml(opt, seg, tg) {
+  return `<h3>${T('lookH')}</h3>${opt(T('themeO'), '', seg('theme', [['auto', T('thAuto')], ['light', T('thLight')], ['dark', T('thDark')]]))}
+    ${opt(T('fsO'), '', seg('fs', [['n', T('fsN')], ['l', T('fsL')], ['xl', T('fsXL')]]))}${opt(T('hcO'), '', tg('hc'))}`;
+}
+
+/* punctualitate */
+const perOf = h => h >= 5 && h < 10 ? 'm' : h >= 10 && h < 16 ? 'd' : h >= 16 && h < 21 ? 'e' : 'n';
+function recordPunct(l) {
+  if (!l || isStreet(l) || !l.realTime || l._punct) return;
+  l._punct = true;
+  const e = { at: Date.now(), line: lineName(l), mode: MK(l.mode), c: colorOf(l), tc: textOf(l), h: new Date(l.scheduledStartTime || l.startTime).getHours(), d0: delayM(l.startTime, l.scheduledStartTime), d1: delayM(l.endTime, l.scheduledEndTime), to: st.to?.name || '' };
+  store.set('punct', [e, ...store.get('punct', [])].slice(0, 1000));
+}
+function punctStats() {
+  const by = {};
+  store.get('punct', []).forEach(e => { (by[e.line + '|' + e.mode] = by[e.line + '|' + e.mode] || []).push(e); });
+  return Object.values(by).filter(a => a.length >= 2).map(a => {
+    const avg = Math.round(a.reduce((s, e) => s + e.d1, 0) / a.length), ok = Math.round(a.filter(e => e.d1 <= 1).length / a.length * 100);
+    const pers = {}; a.forEach(e => (pers[perOf(e.h)] = pers[perOf(e.h)] || []).push(e.d1));
+    const worst = Object.entries(pers).filter(([, v]) => v.length >= 2).map(([p, v]) => [p, Math.round(v.reduce((s, x) => s + x, 0) / v.length)]).sort((x, y) => y[1] - x[1])[0];
+    return { e: a[0], n: a.length, avg, ok, worst: worst && worst[1] > avg && worst[1] > 0 ? worst : null };
+  }).sort((x, y) => y.n - x.n);
+}
+function punctHtml() {
+  const s = punctStats();
+  return `<h3>${T('punctH')}</h3>` + (s.length ? s.slice(0, 12).map(x => `<div class="row"><span>${badge({ mode: x.e.mode === 'metro' ? 'SUBWAY' : x.e.mode === 'train' ? 'RAIL' : x.e.mode.toUpperCase(), routeShortName: x.e.line, routeColor: x.e.c, routeTextColor: x.e.tc })}</span><span class="tx"><div class="${x.avg >= 3 ? 'late' : ''}">${T('avgDelay', x.avg)}, ${T('onTimePct', x.ok)}</div><small>${T('samples', x.n)}${x.worst ? ' &middot; ' + T('worstAt', T('per_' + x.worst[0]), x.worst[1]) : ''}</small></span></div>`).join('') : `<p class="muted" style="font-size:14px">${T('punctEmpty')}</p>`);
+}
+function bufferFor(dep) {
+  const a = store.get('punct', []).filter(e => e.to && e.to === dep.to?.name);
+  if (a.length < 2) return 0;
+  return Math.min(10, Math.max(0, Math.round(a.reduce((s, e) => s + e.d1, 0) / a.length)));
+}
+
+/* alternativa la intarziere */
+async function checkAlt() {
+  if (!live || live.altBusy || live.done) return;
+  const legs = live.it.legs, l = legs[live.i];
+  const nt = !isStreet(l) && live.idx === 0 && Date.now() < new Date(l.startTime).getTime() + 60000 ? l : isStreet(l) && legs[live.i + 1] && !isStreet(legs[live.i + 1]) ? legs[live.i + 1] : null;
+  if (!nt) return;
+  const late = delayM(nt.startTime, nt.scheduledStartTime), canc = nt.cancelled || nt.tripCancelled;
+  if (late < 5 && !canc) return;
+  if (Date.now() - (live.altAt || 0) < 180000) return;
+  live.altAt = Date.now(); live.altBusy = true;
+  try {
+    const from = st.acc != null ? { lat: st.loc[0], lon: st.loc[1] } : (isStreet(l) ? l.from : nt.from), dest = legs.at(-1).to;
+    const p = { fromPlace: `${from.lat},${from.lon}`, toPlace: `${dest.lat},${dest.lon}`, detailedTransfers: true, language: O.lang, maxPreTransitTime: O.walk * 60, maxPostTransitTime: O.walk * 60 };
+    const d = await api('/v6/plan', p, 60000);
+    const curEnd = new Date(legs.at(-1).endTime).getTime();
+    const best = (d.itineraries || []).filter(it => it.legs.some(x => !isStreet(x)) && !it.legs.some(x => x.tripId && x.tripId === nt.tripId)).sort((a, b) => new Date(a.endTime) - new Date(b.endTime))[0];
+    const gain = best ? Math.round((curEnd - new Date(best.endTime).getTime()) / 60000) : 0;
+    live.alt = best && (gain >= 3 || canc) ? { it: best, gain, line: lineName(nt), late, canc } : null;
+  } catch {}
+  if (live) { live.altBusy = false; liveTick(); }
+}
+function altHtml() {
+  const a = live?.alt; if (!a || live.altDismissed === a.it) return '';
+  const e = a.it.legs.at(-1);
+  return `<div class="altc">${I.zap}<div><b>${T('altH')}</b><div>${esc(a.canc ? T('altCancel', a.line) : T('altTxt', a.line, a.late))} ${T('altArr', fmt(e.endTime, e.to.tz), Math.max(a.gain, 0))}</div>
+    <div class="legs" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:8px 0">${legsStrip(a.it.legs)}</div>
+    <div class="btns"><button class="btn" id="altUse">${T('altUse')}</button><button class="btn ghost" id="altNo">${T('altIgnore')}</button></div></div></div>`;
+}
+function altBind() {
+  $('#altUse')?.addEventListener('click', () => {
+    const it = live.alt.it;
+    Object.assign(live, { it, i: 0, idx: 0, alerted: {}, alt: null, done: false, endDone: false });
+    st.cur = it; drawRoute(it, 0);
+    if (PUSH) pushSchedule('live', liveAlerts(it)).catch(() => {});
+    toast(T('altSwitched')); liveTick();
+  });
+  $('#altNo')?.addEventListener('click', () => { live.altDismissed = live.alt.it; liveTick(); });
+}
+
+/* bilete */
+function ticketsHtml(it) {
+  const seen = new Map();
+  it.legs.forEach(l => { if (!isStreet(l) && l.agencyUrl && !seen.has(l.agencyUrl)) seen.set(l.agencyUrl, l.agencyName || new URL(l.agencyUrl).hostname); });
+  if (!seen.size) return '';
+  return `<div class="tix">${I.ticket}<span>${T('tickets')}: ${[...seen].map(([u, n]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(n)}</a>`).join(', ')}</span></div>`;
+}
+
+/* liniile mele, langa mine */
+const myLines = () => store.get('mylines', []);
+const lineKey = g => g.routeShortName + '|' + g.mode;
+async function lineNear(g) {
+  if (!st.loc) throw new Error(T('needLocLine'));
+  const out = [];
+  for (const d of g.dirs.slice(0, 2)) {
+    try {
+      const resp = await api('/experimental/map/route-details', { routeIdx: d.idx, language: O.lang }, 3600000);
+      const r = (resp.routes || [])[0]; if (!r) continue;
+      const stops = routeStops(resp, r).slice(0, -1);
+      if (!stops.length) continue;
+      const near = stops.map(s => ({ s, d: dist(st.loc, ll(s)) })).sort((a, b) => a.d - b.d)[0];
+      const walkMin = Math.max(1, Math.round(near.d / (O.speed === 'slow' ? 60 : O.speed === 'fast' ? 95 : 75)));
+      const res = await api('/v6/stoptimes', { stopId: near.s.stopId, n: 40, language: O.lang }, 25000).catch(() => ttFallback(near.s.stopId));
+      const all = (res.stopTimes || []).filter(x => lineName(x) === g.routeShortName && (x.place.departure || x.place.scheduledDeparture) && depT(x) > Date.now() - 30000);
+      const m = all.filter(x => x.headsign === d.last || (x.tripTo?.name || '') === d.last);
+      const deps = (m.length ? m : all).sort((a, b) => depT(a) - depT(b)).slice(0, 4);
+      out.push({ dir: d, stop: near.s, dist: near.d, walkMin, deps });
+    } catch {}
+  }
+  return out;
+}
+function nearCard(x, compact) {
+  const now = Date.now(), firstOk = x.deps.findIndex(s => (depT(s) - now) / 60000 >= x.walkMin);
+  const times = x.deps.map((s, i) => { const t = s.place.departure || s.place.scheduledDeparture, m = Math.round((depT(s) - now) / 60000); return `<span class="${i === firstOk ? 'ok' : i < firstOk || firstOk < 0 ? 'miss' : ''}">${m <= 0 ? T('now') : m < 60 ? m + ' min' : fmt(t, s.place.tz)}${s.realTime ? '<i class="live"></i>' : ''}</span>`; }).join('');
+  if (compact) return `<div class="nl"><small>${esc(T('toward', x.dir.last))}</small><div class="nlt">${times || `<span class="miss">-</span>`}</div></div>`;
+  return `<div class="nc"><div class="nch"><b>${esc(T('toward', x.dir.last))}</b><small>${esc(T('atStop', x.stop.name, meters(x.dist), x.walkMin))}</small></div>
+    ${x.deps.length ? `<div class="nlt big">${times}</div><small class="${firstOk === 0 ? 'okc' : 'late'}">${firstOk === 0 ? T('catchable') : firstOk > 0 ? T('catchNext', Math.round((depT(x.deps[firstOk]) - now) / 60000) + ' min') : T('tooLate')}</small>` : `<p class="muted" style="font-size:14px">${T('noDepLine')}</p>`}</div>`;
+}
+async function renderLineNear(g) {
+  const isMine = myLines().some(x => lineKey(x) === lineKey(g));
+  pane.innerHTML = hd(`${badge(g)} ${esc(T('nearTitle', g.routeShortName))}`, `<button class="icb fav ${isMine ? 'on' : ''}" id="myl" aria-label="${T('addMyLine')}">${I.star}</button>`) + `<div id="nearBody"><div class="skel"></div></div>`;
+  $('#myl').onclick = () => {
+    let l = myLines();
+    const on = l.some(x => lineKey(x) === lineKey(g));
+    l = on ? l.filter(x => lineKey(x) !== lineKey(g)) : [...l, { routeShortName: g.routeShortName, routeColor: g.routeColor, routeTextColor: g.routeTextColor, mode: g.mode, longName: g.longName, dirs: g.dirs }].slice(-6);
+    store.set('mylines', l); $('#myl').classList.toggle('on', !on); toast(on ? T('lineRemoved') : T('lineAdded'));
+  };
+  vehFocus = sg => sg.name === g.routeShortName;
+  const load = async () => {
+    try {
+      await needLoc();
+      const res = await lineNear(g);
+      if (view !== 'near') return;
+      routeL.clearLayers();
+      res.forEach(x => endMark(x.stop, colorOf(g)));
+      if (res.length) fitTo(L.latLngBounds([st.loc, ...res.map(x => ll(x.stop))]));
+      $('#nearBody').innerHTML = res.length ? res.map(x => nearCard(x)).join('') : `<p class="muted">${T('noDepLine')}</p>`;
+    } catch (e) { const b = $('#nearBody'); if (b) b.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  };
+  load();
+  clearInterval(paneTimer); paneTimer = setInterval(() => view === 'near' && load(), 30000);
+}
+async function loadMyLines() {
+  const el = $('#myLines'); if (!el || !st.loc) return;
+  const ls = myLines().slice(0, 4);
+  const res = await Promise.all(ls.map(g => lineNear(g).catch(() => [])));
+  if (!$('#myLines') || view !== 'home') return;
+  el.innerHTML = ls.map((g, i) => `<button class="fs ml" data-ml="${i}"><div class="fsh"><span>${badge(g)}</span>${res[i][0] ? `<small class="muted">${esc(res[i][0].stop.name)}</small>` : ''}${I.chev}</div>${res[i].map(x => nearCard(x, true)).join('')}</button>`).join('');
+  el.querySelectorAll('[data-ml]').forEach(b => b.onclick = () => { const g = ls[b.dataset.ml]; st.line = g; nav('near', () => renderLineNear(g)); });
+}
+
 /* ---------- versiune noua ---------- */
 Object.assign(L10N.ro, { updAvail: 'Versiune noua disponibila. Atinge pentru actualizare.' });
 Object.assign(L10N.en, { updAvail: 'New version available. Tap to update.' });
@@ -1711,6 +1893,7 @@ setInterval(checkVersion, 30 * 60000);
 setTimeout(checkVersion, 5000);
 
 /* ---------- pornire ---------- */
+applyLook();
 applyStatic();
 setOffline(navigator.onLine ? null : 0);
 setSheet('half', true);

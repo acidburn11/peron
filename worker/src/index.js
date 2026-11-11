@@ -106,9 +106,9 @@ export class Device {
     if (p === '/depart') {
       const old = Object.fromEntries(((await s.get('deps')) || []).map(d => [d.id, d]));
       const deps = (Array.isArray(body.list) ? body.list : []).slice(0, 10).filter(d => /^\d{2}:\d{2}$/.test(d.arrive || '')).map(d => {
-        const n = { id: str(d.id, 20), from: place(d.from), to: place(d.to), arrive: d.arrive, days: Array.isArray(d.days) ? d.days.map(Number).filter(x => x >= 0 && x <= 6) : [], date: /^\d{4}-\d{2}-\d{2}$/.test(d.date || '') ? d.date : null, walk: Math.min(1800, num(d.walk) || 900), on: d.on !== false };
+        const n = { id: str(d.id, 20), from: place(d.from), to: place(d.to), arrive: d.arrive, days: Array.isArray(d.days) ? d.days.map(Number).filter(x => x >= 0 && x <= 6) : [], date: /^\d{4}-\d{2}-\d{2}$/.test(d.date || '') ? d.date : null, walk: Math.min(1800, num(d.walk) || 900), buffer: Math.min(15, Math.max(0, num(d.buffer))), on: d.on !== false };
         const o = old[n.id];
-        const same = o && JSON.stringify([o.from, o.to, o.arrive, o.days, o.date, o.on]) === JSON.stringify([n.from, n.to, n.arrive, n.days, n.date, n.on]);
+        const same = o && JSON.stringify([o.from, o.to, o.arrive, o.days, o.date, o.on, o.buffer]) === JSON.stringify([n.from, n.to, n.arrive, n.days, n.date, n.on, n.buffer]);
         if (same) return { ...n, target: o.target, stage: o.stage, at: o.at, plan: o.plan };
         const target = n.on ? nextOccurrence(n, now, tz) : null;
         return { ...n, target, stage: 'plan', at: target ? Math.max(now + 2000, target - 4 * 3600000) : null, plan: null };
@@ -172,9 +172,9 @@ export class Device {
   }
 
   async planTrip(d) {
-    const q = { fromPlace: `${d.from.lat},${d.from.lon}`, toPlace: `${d.to.lat},${d.to.lon}`, time: new Date(d.target).toISOString(), arriveBy: 'true', maxPreTransitTime: d.walk, maxPostTransitTime: d.walk };
+    const q = { fromPlace: `${d.from.lat},${d.from.lon}`, toPlace: `${d.to.lat},${d.to.lon}`, time: new Date(d.target - (d.buffer || 0) * 60000).toISOString(), arriveBy: 'true', maxPreTransitTime: d.walk, maxPostTransitTime: d.walk };
     const r = await tget('/v6/plan', q);
-    const its = (r.itineraries || []).filter(it => new Date(it.endTime).getTime() <= d.target + 60000);
+    const its = (r.itineraries || []).filter(it => new Date(it.endTime).getTime() <= d.target - (d.buffer || 0) * 60000 + 60000);
     const it = its.sort((a, b) => new Date(b.startTime) - new Date(a.startTime))[0];
     if (!it) return null;
     const legs = it.legs, fi = legs.findIndex(l => !['WALK', 'RENTAL', 'BIKE', 'CAR'].includes(l.mode)), f = legs[fi];
