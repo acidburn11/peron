@@ -11,7 +11,7 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.12.1';
+const APP_V = '2026.11.12.2';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -333,6 +333,7 @@ function startWatch() {
     if (first && view === 'home') centerOn(st.loc, 16);
     store.set('loc', st.loc); drawMe(); if (live) liveTick();
     if (first && view === 'home') renderHome();
+    updateCity();
   }, () => {}, { enableHighAccuracy: true, maximumAge: 4000 });
 }
 const needLoc = () => st.acc != null ? Promise.resolve(st.loc) : new Promise((ok, no) => {
@@ -490,7 +491,7 @@ function back() {
   if (prev === 'route' && st.cur) return go('route', () => renderRoute(st.cur));
   if (prev === 'stop' && st.stop) return go('stop', () => renderStop(st.stop));
   if (prev === 'line' && st.line) return go('line', () => renderLine(st.line, st.lineDir));
-  const gen = { weather: renderWeather, deps: renderDeps, hist: renderHist, reach: renderReach, near: () => renderLineNear(st.line) };
+  const gen = { weather: renderWeather, deps: renderDeps, hist: renderHist, reach: renderReach, near: () => renderLineNear(st.line), cities: renderCities, net: () => renderNet(netCur?.key) };
   if (gen[prev]) return go(prev, gen[prev]);
   if (prev && prev !== 'home') return back();
   backStack.length = 0; backStack.push('home'); routeL.clearLayers(); go('home', renderHome); setSheet('half');
@@ -506,9 +507,9 @@ function placeBtn(kind) {
 const routeRow = (x, list, ic) => `<div class="row"><span class="ic">${ic}</span><button class="tx" data-k="${esc(x.k)}" style="text-align:left"><div>${esc(x.to.name)}</div><small>${T('from')} ${esc(x.from.me ? T('myLoc') : x.from.name)}</small></button><button class="x" data-del="${esc(x.k)}" data-l="${list}" aria-label="${T('delete')}">${I.close}</button></div>`;
 function renderHome() {
   const favs = store.get('favs', []), rec = store.get('recent', []).filter(r => !favs.some(f => f.k === r.k)).slice(0, 5), fst = store.get('fstops', []);
-  pane.innerHTML = `<div class="quick">${placeBtn('home')}${placeBtn('work')}</div>
+  pane.innerHTML = `<button class="cityrow" id="cityRow"></button><div class="quick">${placeBtn('home')}${placeBtn('work')}</div>
     <div id="lastHome"></div>
-    <div class="tools"><button id="reachB">${I.reach}<span>${T('reach')}</span></button><button id="depsB">${I.dep}<span>${T('depsT')}</span></button><button id="histB">${I.hist}<span>${T('histT')}</span></button></div>
+    <div class="tools t4"><button id="reachB">${I.reach}<span>${T('reach')}</span></button><button id="netB">${I.netmap}<span>${T('netT')}</span></button><button id="depsB">${I.dep}<span>${T('depsT')}</span></button><button id="histB">${I.hist}<span>${T('histT')}</span></button></div>
     ${myLines().length ? `<h3>${T('myLines')}</h3><div id="myLines"><div class="skel" style="height:70px"></div></div>` : ''}
     ${fst.length ? `<h3>${T('myStops')}</h3><div id="favStops"></div>` : ''}
     <h3>${T('nearStops')}</h3><div id="near">${st.loc ? '<div class="skel" style="height:60px"></div>' : `<button class="row" id="askLoc"><span class="ic">${I.me}</span><span class="tx"><div>${T('showNear')}</div><small>${T('needLoc')}</small></span></button>`}</div>
@@ -520,6 +521,8 @@ function renderHome() {
     routeTo(p);
   });
   $('#reachB').onclick = () => nav('reach', renderReach);
+  $('#netB').onclick = () => { st.netModes = null; nav('net', () => renderNet()); };
+  renderCityRow(); $('#cityRow').onclick = () => nav('cities', renderCities);
   $('#depsB').onclick = () => nav('deps', renderDeps);
   $('#histB').onclick = () => nav('hist', renderHist);
   $('#askLoc')?.addEventListener('click', async () => { try { await needLoc(); centerOn(st.loc, 16); renderHome(); } catch (e) { toast(e.message); } });
@@ -762,7 +765,7 @@ function applyStatic() {
 function refreshView() {
   if (live) return liveTick();
   renderWxChip();
-  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach, weather: renderWeather, deps: renderDeps, hist: renderHist, near: () => renderLineNear(st.line) })[view]?.();
+  ({ home: renderHome, results: renderResults, route: () => renderRoute(st.cur), stop: () => renderStop(st.stop), line: () => renderLine(st.line, st.lineDir), reach: renderReach, weather: renderWeather, deps: renderDeps, hist: renderHist, near: () => renderLineNear(st.line), cities: renderCities, net: () => renderNet(netCur?.key) })[view]?.();
 }
 
 /* ---------- planificare ---------- */
@@ -1869,6 +1872,189 @@ async function loadMyLines() {
   el.querySelectorAll('[data-ml]').forEach(b => b.onclick = () => { const g = ls[b.dataset.ml]; st.line = g; nav('near', () => renderLineNear(g)); });
 }
 
+/* ---------- v10: oras curent, orase vizitate, harta retelei ---------- */
+Object.assign(L10N.ro, {
+  youAreIn: 'Te afli in', locating: 'Caut orasul...', citiesT: 'Orasele mele', citiesN: n => `${n} ${n === 1 ? 'oras' : 'orase'}`, countriesN: n => `${n} ${n === 1 ? 'tara' : 'tari'}`,
+  firstVisit: d => `prima vizita ${d}`, daysN: n => `${n} ${n === 1 ? 'zi' : 'zile'}`, noCities: 'Orasele apar aici pe masura ce folosesti aplicatia.',
+  autoH: 'Inregistrare automata', autoInfo: 'Aplicatiile web nu pot afla locatia cand sunt inchise. Cu o automatizare in aplicatia Scurtaturi, iPhone-ul trimite singur locatia de cateva ori pe zi, iar orasele se adauga chiar daca nu deschizi Peron.',
+  autoSteps: '1. Scurtaturi > Automatizare > + > Ora din zi (de exemplu 10:00, zilnic) > Ruleaza imediat.<br>2. Adauga actiunea Obtine locatia curenta.<br>3. Adauga actiunea Obtine continutul URL-ului: lipeste linkul de mai jos, Metoda POST, Corp cerere JSON, campurile lat = Locatia curenta > Latitudine si lon = Locatia curenta > Longitudine.<br>4. Repeta pentru 2-3 ore pe zi, de exemplu 10:00, 15:00 si 21:00.',
+  autoLink: 'Copiaza linkul pentru Scurtaturi', autoNote: 'Linkul e personal. Nu-l trimite nimanui.',
+  netT: 'Harta retelei', netSub: c => `Linii de transport in ${c}`, netLoading: 'Descarc reteaua orasului...', netSaved: d => `salvata pe telefon ${d}, merge si fara internet`, netPng: 'Salveaza ca imagine', netRefresh: 'Actualizeaza', netDel: 'Sterge de pe telefon', netOfficial: 'Cauta harta oficiala',
+  netOther: 'Alte orase descarcate', netNone: 'Nu am gasit linii de transport in zona.', netNeedCity: 'Pentru harta retelei e nevoie de locatia ta.', netDeleted: 'Harta a fost stearsa.', netLines: 'Linii',
+  M_rail: 'Tren'
+});
+Object.assign(L10N.en, {
+  youAreIn: 'You are in', locating: 'Finding your city...', citiesT: 'My cities', citiesN: n => `${n} ${n === 1 ? 'city' : 'cities'}`, countriesN: n => `${n} ${n === 1 ? 'country' : 'countries'}`,
+  firstVisit: d => `first visit ${d}`, daysN: n => `${n} ${n === 1 ? 'day' : 'days'}`, noCities: 'Cities appear here as you use the app.',
+  autoH: 'Automatic tracking', autoInfo: 'Web apps cannot read your location while closed. With an automation in the Shortcuts app, your iPhone sends its location a few times a day, so cities are added even if you do not open Peron.',
+  autoSteps: '1. Shortcuts > Automation > + > Time of Day (for example 10:00, daily) > Run Immediately.<br>2. Add the action Get Current Location.<br>3. Add the action Get Contents of URL: paste the link below, Method POST, Request Body JSON, fields lat = Current Location > Latitude and lon = Current Location > Longitude.<br>4. Repeat for 2-3 times a day, for example 10:00, 15:00 and 21:00.',
+  autoLink: 'Copy link for Shortcuts', autoNote: 'The link is personal. Do not share it.',
+  netT: 'Network map', netSub: c => `Transit lines in ${c}`, netLoading: 'Downloading the city network...', netSaved: d => `saved on the phone ${d}, works offline`, netPng: 'Save as image', netRefresh: 'Update', netDel: 'Delete from phone', netOfficial: 'Find the official map',
+  netOther: 'Other downloaded cities', netNone: 'No transit lines found in this area.', netNeedCity: 'The network map needs your location.', netDeleted: 'Map deleted.', netLines: 'Lines',
+  M_rail: 'Train'
+});
+I.netmap = sv('<circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/>');
+I.globe = sv('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>');
+BK_KEYS.push('cities', 'vtoken');
+
+const idb = (() => {
+  let p;
+  const db = () => p || (p = new Promise((ok, no) => { const r = indexedDB.open('peron', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }));
+  const tx = async (mode, fn) => { const d = await db(); return new Promise((ok, no) => { const t = d.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => ok(q?.result); t.onerror = () => no(t.error); }); };
+  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)), del: k => tx('readwrite', s => s.delete(k)), keys: () => tx('readonly', s => s.getAllKeys()) };
+})();
+
+/* oras curent si orase vizitate */
+const SUBAREA = /sector|district|dzielnica|arrondissement|bezirk|borough|quartier|\d/i;
+async function cityAt(lat, lon) {
+  const g = await api('/v1/reverse-geocode', { place: `${lat.toFixed(3)},${lon.toFixed(3)}`, numResults: 1, language: O.lang }, 86400000);
+  const areas = g[0]?.areas || [];
+  const c = areas.filter(a => a.adminLevel >= 4 && a.adminLevel <= 8 && !SUBAREA.test(a.name)).sort((a, b) => b.adminLevel - a.adminLevel)[0];
+  const co = areas.find(a => a.adminLevel === 2);
+  return c ? { city: c.name, country: co?.name || '' } : null;
+}
+const localDay = t => new Date(t - new Date(t).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+async function trackCity(lat, lon, at = Date.now()) {
+  const c = await cityAt(lat, lon).catch(() => null); if (!c) return null;
+  const k = c.city + '|' + c.country, all = store.get('cities', {}), day = localDay(at);
+  const e = all[k] || { city: c.city, country: c.country, lat: +lat.toFixed(3), lon: +lon.toFixed(3), first: at, last: at, days: [] };
+  e.first = Math.min(e.first, at); e.last = Math.max(e.last, at);
+  if (!e.days.includes(day)) e.days = [...e.days, day].slice(-500);
+  all[k] = e; store.set('cities', all);
+  return c;
+}
+let cityAtPos = null;
+async function updateCity(force) {
+  if (!st.loc || (!force && cityAtPos && dist(cityAtPos, st.loc) < 2000)) return;
+  cityAtPos = st.loc.slice();
+  const c = await trackCity(st.loc[0], st.loc[1]);
+  if (c) { st.city = c; renderCityRow(); }
+}
+function renderCityRow() {
+  const el = $('#cityRow'); if (!el) return;
+  el.innerHTML = `${I.pin}<span>${T('youAreIn')}: <b>${st.city ? esc(st.city.city) : T('locating')}</b>${st.city?.country ? `, ${esc(st.city.country)}` : ''}</span>${I.chev}`;
+}
+const vToken = () => { let t = store.get('vtoken', null); if (!t) { t = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join(''); store.set('vtoken', t); } return t; };
+async function syncVisits() {
+  if (!PUSH || !navigator.onLine) return;
+  try {
+    const since = store.get('vsince', 0);
+    const list = await (await fetch(`${PUSH}/visits?t=${vToken()}&since=${since}`, { cache: 'no-store' })).json();
+    if (!Array.isArray(list) || !list.length) return;
+    const seen = new Set();
+    for (const v of list) {
+      const k = `${Math.round(v.lat * 20)},${Math.round(v.lon * 20)},${localDay(v.at)}`;
+      if (seen.has(k)) continue; seen.add(k);
+      if (seen.size > 40) break;
+      await trackCity(v.lat, v.lon, v.at);
+    }
+    store.set('vsince', Math.max(...list.map(v => v.at)));
+  } catch {}
+}
+function renderCities() {
+  const all = Object.values(store.get('cities', {})).sort((a, b) => b.last - a.last);
+  const countries = new Set(all.map(c => c.country).filter(Boolean));
+  routeL.clearLayers();
+  all.forEach(c => L.circleMarker([c.lat, c.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#C9362B', fillOpacity: 1 }).bindTooltip(esc(c.city)).addTo(routeL));
+  if (all.length) setTimeout(() => fitTo(routeL.getBounds()), 50);
+  const dfmt = t => new Date(t).toLocaleDateString(LOC(), { day: 'numeric', month: 'short', year: 'numeric' });
+  const link = PUSH ? `${PUSH}/visit?t=${vToken()}` : '';
+  pane.innerHTML = hd(T('citiesT')) + `<div class="stats"><div><b>${all.length}</b><small>${T('citiesN', all.length).replace(/^\d+\s/, '')}</small></div><div><b>${countries.size}</b><small>${T('countriesN', countries.size).replace(/^\d+\s/, '')}</small></div></div>`
+    + (all.length ? [...new Set(all.map(c => c.country))].map(co => `<h3>${esc(co || '?')}</h3>` + all.filter(c => c.country === co).map(c => `<div class="row"><span class="ic">${I.pin}</span><span class="tx"><div>${esc(c.city)}</div><small>${T('firstVisit', dfmt(c.first))} &middot; ${T('daysN', c.days.length)}</small></span></div>`).join('')).join('') : `<p class="muted">${T('noCities')}</p>`)
+    + (PUSH ? `<h3>${T('autoH')}</h3><p class="muted" style="font-size:14px">${T('autoInfo')}</p><p style="font-size:14px;line-height:1.6">${T('autoSteps')}</p>
+      <button class="btn" id="vLink" style="width:100%">${T('autoLink')}</button><p class="muted" style="font-size:12px">${T('autoNote')}</p>` : '');
+  $('#vLink')?.addEventListener('click', () => copyText(link, T('linkCopied')));
+}
+
+/* harta retelei */
+const NETM = { metro: 'metro', train: 'train', tram: 'tram', bus: 'bus' };
+const netMode = m => { const k = MK(m); return k === 'ferry' || k === 'cable' ? 'tram' : k; };
+async function netFetch() {
+  const [la, lo] = st.loc, d = .12;
+  const resp = await api('/experimental/map/routes', { zoom: 14, min: `${la - d},${lo - d * 1.6}`, max: `${la + d},${lo + d * 1.6}`, language: O.lang }, 600000);
+  const routes = [], keepStops = new Map();
+  (resp.routes || []).forEach(r => {
+    const m = netMode(r.mode), tr = (r.transitRoutes || [])[0] || {};
+    const segs = (r.segments || []).map(s => s.polyline);
+    routes.push({ m, n: tr.shortName || '', c: hex(tr.color) || MC[m], segs });
+    if (m === 'metro' || m === 'train') (r.segments || []).forEach(s => [s.from, s.to].forEach(i => { const p = resp.stops?.[i]; if (p && !keepStops.has(p.name)) keepStops.set(p.name, { n: p.name, lat: p.lat, lon: p.lon, m }); }));
+  });
+  return { city: st.city?.city || '', country: st.city?.country || '', at: Date.now(), center: st.loc.slice(), polys: (resp.polylines || []).map(p => [p.polyline.points, p.polyline.precision]), routes, stops: [...keepStops.values()] };
+}
+let netCur = null;
+async function renderNet(key) {
+  pane.innerHTML = hd(T('netT')) + `<div id="netBody"><p class="muted">${T('netLoading')}</p><div class="skel"></div></div>`;
+  try {
+    if (!key) { await needLoc(); if (!st.city) await updateCity(true); if (!st.city) throw new Error(T('netNeedCity')); key = 'net:' + st.city.city + '|' + st.city.country; }
+    let data = await idb.get(key).catch(() => null);
+    if (!data) { data = await netFetch(); if (data.routes.length) await idb.set(key, data).catch(() => {}); }
+    if (view !== 'net') return;
+    netCur = { key, data, modes: st.netModes || null };
+    drawNet();
+  } catch (e) { const b = $('#netBody'); if (b) b.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+function drawNet() {
+  const { data, key } = netCur;
+  if (!data.routes.length) { $('#netBody').innerHTML = `<p class="muted">${T('netNone')}</p>`; return; }
+  const counts = {}; data.routes.forEach(r => counts[r.m] = (counts[r.m] || 0) + 1);
+  const avail = ['metro', 'train', 'tram', 'bus'].filter(m => counts[m]);
+  if (!netCur.modes) netCur.modes = avail.filter(m => m !== 'bus').length ? avail.filter(m => m !== 'bus') : avail;
+  const on = new Set(netCur.modes);
+  routeL.clearLayers(); stopsL.clearLayers();
+  const W = { metro: 7, train: 5, tram: 4, bus: 2.5 }, drawn = new Set();
+  ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => {
+    const k = m + i; if (drawn.has(k) || !data.polys[i]) return; drawn.add(k);
+    L.polyline(decode(data.polys[i][0], data.polys[i][1]), { color: r.c, weight: W[m], opacity: m === 'bus' ? .65 : .95, interactive: false }).addTo(routeL);
+  })));
+  data.stops.filter(s => on.has(s.m)).forEach(s => L.circleMarker([s.lat, s.lon], { radius: 4, color: '#14213D', weight: 2, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(esc(s.n), { direction: 'top' }).addTo(routeL));
+  if (routeL.getLayers().length) fitTo(routeL.getBounds());
+  const lines = [...new Map(data.routes.filter(r => on.has(r.m) && r.n).map(r => [r.m + r.n, r])).values()].sort((a, b) => ['metro', 'train', 'tram', 'bus'].indexOf(a.m) - ['metro', 'train', 'tram', 'bus'].indexOf(b.m) || a.n.localeCompare(b.n, undefined, { numeric: true }));
+  const when = new Date(data.at).toLocaleDateString(LOC(), { day: 'numeric', month: 'short' });
+  const q = encodeURIComponent(`${data.city} ${O.lang === 'en' ? 'public transport map pdf' : 'harta transport public pdf'}`);
+  $('#netBody').innerHTML = `<div class="muted" style="font-size:14px;margin:-6px 0 8px">${esc(T('netSub', data.city))}<br><small>${T('netSaved', when)}</small></div>
+    <div class="chk">${avail.map(m => `<button data-nm="${m}" class="${on.has(m) ? 'on' : ''}">${I[m] || I.bus}${T('M_' + m)} <small class="muted">${counts[m]}</small></button>`).join('')}</div>
+    <div class="btns" style="flex-wrap:wrap"><button class="btn" id="netPng">${T('netPng')}</button><a class="btn ghost" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener" style="text-decoration:none;text-align:center">${T('netOfficial')}</a></div>
+    <h3>${T('netLines')}</h3><div class="netl">${lines.slice(0, 300).map((r, i) => `<button data-nl="${esc(r.n)}">${badge({ mode: { metro: 'SUBWAY', train: 'RAIL', tram: 'TRAM', bus: 'BUS' }[r.m], routeShortName: r.n, routeColor: r.c.replace('#', '') })}</button>`).join('')}</div>
+    <div class="btns"><button class="btn ghost" id="netRef">${T('netRefresh')}</button><button class="btn ghost" id="netDel">${T('netDel')}</button></div>
+    <div id="netOther"></div>`;
+  $('#netBody').querySelectorAll('[data-nm]').forEach(b => b.onclick = () => { const m = b.dataset.nm; netCur.modes = on.has(m) ? netCur.modes.filter(x => x !== m) : [...netCur.modes, m]; if (!netCur.modes.length) netCur.modes = [m]; st.netModes = netCur.modes; drawNet(); });
+  $('#netBody').querySelectorAll('[data-nl]').forEach(b => b.onclick = async () => { try { const g = (await findLines(b.dataset.nl))[0]; if (g) openLine(g); } catch {} });
+  $('#netPng').onclick = () => netPng(data, on);
+  $('#netRef').onclick = async () => { $('#netBody').innerHTML = `<p class="muted">${T('netLoading')}</p>`; try { const d = await netFetch(); await idb.set(key, d); netCur.data = d; drawNet(); } catch (e) { toast(e.message); drawNet(); } };
+  $('#netDel').onclick = async () => { await idb.del(key).catch(() => {}); toast(T('netDeleted')); back(); };
+  idb.keys().then(ks => {
+    const other = (ks || []).filter(k => String(k).startsWith('net:') && k !== key);
+    const el = $('#netOther'); if (!el || !other.length) return;
+    el.innerHTML = `<h3>${T('netOther')}</h3>` + other.map(k => `<button class="row" data-ok="${esc(k)}"><span class="ic">${I.netmap}</span><span class="tx"><div>${esc(String(k).slice(4).replace('|', ', '))}</div></span>${I.chev}</button>`).join('');
+    el.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => { st.netModes = null; renderNet(b.dataset.ok); });
+  }).catch(() => {});
+}
+async function netPng(data, on) {
+  const lines = [], W = { metro: 10, train: 7, tram: 5, bus: 3 };
+  ['bus', 'tram', 'train', 'metro'].filter(m => on.has(m)).forEach(m => { const seen = new Set(); data.routes.filter(r => r.m === m).forEach(r => r.segs.forEach(i => { if (seen.has(i) || !data.polys[i]) return; seen.add(i); lines.push({ m, c: r.c, p: decode(data.polys[i][0], data.polys[i][1]) }); })); });
+  if (!lines.length) return;
+  const my = la => Math.log(Math.tan(Math.PI / 4 + la * Math.PI / 360));
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  lines.forEach(l => l.p.forEach(([la, lo]) => { x0 = Math.min(x0, lo); x1 = Math.max(x1, lo); y0 = Math.min(y0, my(la)); y1 = Math.max(y1, my(la)); }));
+  const sx = (x1 - x0) * Math.PI / 180, sy = y1 - y0, S = 2600, pad = 90;
+  const w = sx >= sy ? S : Math.round(S * sx / sy), h = sx >= sy ? Math.round(S * sy / sx) : S;
+  const cv = document.createElement('canvas'); cv.width = w + pad * 2; cv.height = h + pad * 2 + 70;
+  const g = cv.getContext('2d'), X = lo => pad + (lo - x0) / (x1 - x0 || 1) * w, Y = la => pad + (y1 - my(la)) / (sy || 1) * h;
+  g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, cv.width, cv.height); g.lineCap = 'round'; g.lineJoin = 'round';
+  lines.forEach(l => { g.strokeStyle = l.c; g.globalAlpha = l.m === 'bus' ? .6 : 1; g.lineWidth = W[l.m]; g.beginPath(); l.p.forEach(([la, lo], i) => i ? g.lineTo(X(lo), Y(la)) : g.moveTo(X(lo), Y(la))); g.stroke(); });
+  g.globalAlpha = 1;
+  const st2 = data.stops.filter(s => on.has(s.m));
+  g.font = '600 22px "Atkinson Hyperlegible", sans-serif';
+  st2.forEach(s => { g.fillStyle = '#fff'; g.strokeStyle = '#14213D'; g.lineWidth = 4; g.beginPath(); g.arc(X(s.lon), Y(s.lat), 8, 0, 7); g.fill(); g.stroke(); });
+  if (st2.length <= 250) st2.forEach(s => { g.lineWidth = 5; g.strokeStyle = '#fff'; g.strokeText(s.n, X(s.lon) + 12, Y(s.lat) - 10); g.fillStyle = '#14213D'; g.fillText(s.n, X(s.lon) + 12, Y(s.lat) - 10); });
+  g.fillStyle = '#14213D'; g.font = '700 44px "Atkinson Hyperlegible", sans-serif'; g.fillText(`${data.city}${data.country ? ', ' + data.country : ''}`, pad, cv.height - 70);
+  g.font = '400 22px "Atkinson Hyperlegible", sans-serif'; g.fillStyle = '#5E6E85'; g.fillText(`Peron - ${new Date(data.at).toLocaleDateString(LOC())} - Transitous / OpenStreetMap`, pad, cv.height - 32);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const file = new File([blob], `peron-${(data.city || 'harta').replace(/[^\w-]+/g, '_')}.png`, { type: 'image/png' });
+  try { if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+}
+
 /* ---------- versiune noua ---------- */
 Object.assign(L10N.ro, { updAvail: 'Versiune noua disponibila. Atinge pentru actualizare.' });
 Object.assign(L10N.en, { updAvail: 'New version available. Tap to update.' });
@@ -1891,6 +2077,9 @@ function showUpdate() {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });
 setInterval(checkVersion, 30 * 60000);
 setTimeout(checkVersion, 5000);
+setTimeout(syncVisits, 3000);
+setInterval(() => { updateCity(); }, 10 * 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncVisits(); updateCity(); } });
 
 /* ---------- pornire ---------- */
 applyLook();

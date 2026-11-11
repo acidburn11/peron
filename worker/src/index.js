@@ -25,6 +25,7 @@ const clean = a => ({
 const json = (d, h, status = 200) => new Response(JSON.stringify(d), { status, headers: { ...h, 'content-type': 'application/json' } });
 const SHARE_ID = /^[A-Za-z0-9_-]{16,48}$/;
 const BK_ID = /^[a-f0-9]{32,64}$/;
+const VT = /^[a-f0-9]{32}$/;
 async function logIt(env, e) {
   try {
     const clip = v => typeof v === 'string' ? v.slice(0, 1500) : v;
@@ -39,6 +40,23 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
     if (req.method === 'GET' && p === '/key') return new Response(env.VAPID_PUBLIC.trim(), { headers: { ...h, 'content-type': 'text/plain' } });
     if (req.method === 'GET' && p === '/') return new Response('Peron push OK', { headers: h });
+    if (p === '/visit' || p === '/visits') {
+      const t = url.searchParams.get('t') || '';
+      if (!VT.test(t)) return json({ error: 'bad token' }, h, 400);
+      const stub = env.VISITS.get(env.VISITS.idFromName(t));
+      if (req.method === 'GET' && p === '/visits') {
+        const r = await stub.fetch('https://do/get?since=' + (+url.searchParams.get('since') || 0));
+        return new Response(await r.text(), { status: r.status, headers: { ...h, 'content-type': 'application/json', 'Cache-Control': 'no-store' } });
+      }
+      if (req.method === 'POST' || req.method === 'GET') {
+        let b = {};
+        if (req.method === 'POST') { try { b = JSON.parse((await req.text()).slice(0, 2000) || '{}'); } catch {} }
+        const lat = num(b.lat ?? url.searchParams.get('lat')), lon = num(b.lon ?? url.searchParams.get('lon'));
+        if (!lat || !lon || Math.abs(lat) > 90 || Math.abs(lon) > 180) return json({ error: 'bad location' }, h, 400);
+        const r = await stub.fetch('https://do/add', { method: 'POST', body: JSON.stringify({ lat, lon }) });
+        return new Response(await r.text(), { status: r.status, headers: { ...h, 'content-type': 'application/json' } });
+      }
+    }
     if (req.method === 'GET' && p === '/logs') {
       if (!env.LOG_KEY || url.searchParams.get('key') !== env.LOG_KEY.trim()) return json({ error: 'forbidden' }, h, 403);
       const r = await env.LOG.get(env.LOG.idFromName('main')).fetch('https://do/get?n=' + (url.searchParams.get('n') || '50'));
@@ -313,6 +331,20 @@ export class Log {
     const e = await req.json();
     logs.push({ at: new Date().toISOString(), ...e });
     await this.s.put('logs', logs.slice(-200));
+    return json({ ok: true }, {});
+  }
+}
+
+export class Visits {
+  constructor(state) { this.s = state.storage; }
+  async fetch(req) {
+    const u = new URL(req.url), v = (await this.s.get('v')) || [];
+    if (u.pathname === '/get') { const since = +u.searchParams.get('since') || 0; return json(v.filter(x => x.at > since), {}); }
+    const b = await req.json(), now = Date.now(), r3 = x => Math.round(x * 1000) / 1000;
+    const last = v.at(-1);
+    if (last && now - last.at < 20 * 60000 && Math.abs(last.lat - r3(b.lat)) < .01 && Math.abs(last.lon - r3(b.lon)) < .01) return json({ ok: true, dup: true }, {});
+    v.push({ lat: r3(b.lat), lon: r3(b.lon), at: now });
+    await this.s.put('v', v.slice(-3000));
     return json({ ok: true }, {});
   }
 }
