@@ -11,7 +11,7 @@ const DEF = { lang: (navigator.language || '').toLowerCase().startsWith('ro') ? 
 const saved = store.get('opts', {});
 const O = { ...DEF, ...saved, modes: { ...DEF.modes, ...(saved.modes || {}) } };
 const saveOpts = () => store.set('opts', O);
-const APP_V = '2026.11.12.5';
+const APP_V = '2026.11.12.6';
 let errN = 0;
 const errSeen = new Set();
 function reportErr(msg, extra = {}) {
@@ -1602,8 +1602,15 @@ function handleUrl() {
   const q = new URLSearchParams(location.search);
   if (![...q.keys()].length) return;
   history.replaceState(null, '', location.pathname);
-  const to = (q.get('to') || '').split(',').map(Number);
-  if (to.length === 2 && to.every(Number.isFinite)) return routeTo({ name: q.get('name') || T('pointOnMap'), lat: to[0], lon: to[1] });
+  const pt = (k) => { const v = (q.get(k) || '').split(',').map(Number); return v.length === 2 && v.every(Number.isFinite) ? v : null; };
+  const to = pt('to'), from = pt('from');
+  if (to) {
+    const dest = { name: q.get('name') || q.get('toName') || T('pointOnMap'), lat: to[0], lon: to[1] };
+    if (!from) return routeTo(dest);
+    st.from = { name: q.get('fromName') || T('pointOnMap'), lat: from[0], lon: from[1] };
+    st.to = dest; st.when = 'now';
+    return plan();
+  }
   if (q.get('go') === 'home' && O.home) return routeTo(O.home);
   if (q.get('go') === 'work' && O.work) return routeTo(O.work);
 }
